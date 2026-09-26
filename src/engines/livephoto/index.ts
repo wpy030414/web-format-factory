@@ -20,14 +20,39 @@ import {
 } from '../types.ts';
 
 /**
- * Live Photo handling: splitting one apart.
+ * Containers holding a frame sequence and no track structure.
+ *
+ * The three animated formats this project accepts, named by container because that is
+ * what the bytes say: the media library cannot read any of them, and each has to be
+ * taken apart by the machinery that owns it.
+ */
+const ANIMATED_CONTAINERS: ReadonlySet<string> = new Set(['gif', 'webp', 'png']);
+
+/**
+ * Where a bare source's still frame comes from.
+ *
+ * A bundle brings a photograph with it; these two have to have one picked out of them,
+ * and the two are picked out in entirely different ways.
+ */
+type FrameSource = 'video' | 'animation';
+
+const FRAME_SELECTED_DETAIL: Record<FrameSource, string> = {
+  video: '静帧取自视频的第一帧，而不是一张全分辨率的照片。',
+  animation: '静帧取自动图的第一帧，而不是一张全分辨率的照片。',
+};
+
+/**
+ * Live Photo handling: splitting one apart, and putting one together.
  *
  * A Live Photo is not a format so much as a bundle, so every conversion out of one is a
  * projection — the user necessarily loses the other half. That is reported by the loss
  * model, not hidden here.
  *
- * Re-assembling a Live Photo is a separate concern and needs the fallback engine for
- * Apple's MOV tagging; see docs/specs/live-photo.md.
+ * Assembling one takes a single input and derives both halves from it. Two kinds of
+ * source can do that: a video, whose first frame stands in for the photograph, and an
+ * animated image, whose first frame does the same and whose frames become the video.
+ * Apple's flavour additionally needs the fallback engine for its MOV tagging; see
+ * docs/specs/live-photo.md.
  */
 export class LivePhotoEngine implements Engine {
   readonly id = 'livephoto';
@@ -148,20 +173,22 @@ export class LivePhotoEngine implements Engine {
 
     // An existing bundle brings both halves with it, and they beat anything re-derived:
     // a real full-resolution photograph, and a video that is already the right thing.
-    // Only a bare video has to give up its first frame as the still.
+    // Anything else has to give up a frame as the still — a video just as much as an
+    // animated image.
     const existing = await this.#detect(input);
     const losses: LossItem[] = [];
 
     onProgress?.({ phase: 'decoding', ratio: undefined, label: '准备静帧' });
-    const still = existing
-      ? await this.#stillHalf(existing, request, losses)
-      : await this.#stillFromVideo(input, request);
-
-    if (!existing) {
+    let still: Uint8Array;
+    if (existing) {
+      still = await this.#stillHalf(existing, request, losses);
+    } else {
+      const frame = await this.#frameSource(input);
+      still = await this.#stillFromFrame(input, request, frame);
       losses.push({
         code: 'frame-selected',
         severity: severityOf('frame-selected'),
-        detail: '静帧取自视频的第一帧，而不是一张全分辨率的照片。',
+        detail: FRAME_SELECTED_DETAIL[frame],
       });
     }
 
@@ -216,8 +243,8 @@ export class LivePhotoEngine implements Engine {
 
     // Where the two halves come from depends on what was dropped. An existing Live Photo
     // brings a full-resolution still of its own, and throwing that away to re-shoot it
-    // from a video frame would discard the best thing in the file; a bare video has
-    // nothing but its frames.
+    // from a frame would discard the best thing in the file; a bare video or animation
+    // has nothing but its frames.
     const existing = await this.#detect(input);
     const losses: LossItem[] = [];
 
@@ -226,11 +253,12 @@ export class LivePhotoEngine implements Engine {
       still = await this.#stillHalf(existing, request, losses);
     } else {
       onProgress?.({ phase: 'decoding', ratio: undefined, label: '截取静帧' });
-      still = await this.#stillFromVideo(input, request);
+      const frame = await this.#frameSource(input);
+      still = await this.#stillFromFrame(input, request, frame);
       losses.push({
         code: 'frame-selected',
         severity: severityOf('frame-selected'),
-        detail: '静帧取自视频的第一帧，而不是一张全分辨率的照片。',
+        detail: FRAME_SELECTED_DETAIL[frame],
       });
     }
 
@@ -316,8 +344,23 @@ export class LivePhotoEngine implements Engine {
     const source = info ? new Blob([info.video.bytes as BlobPart]) : input;
 
     const head = new Uint8Array(await source.slice(0, 64).arrayBuffer());
+    const sniffed = sniff(head).container;
     const wanted = container === 'mov' ? 'isobmff-mov' : 'isobmff-mp4';
-    if (sniff(head).container === wanted) return new Uint8Array(await source.arrayBuffer());
+    if (sniffed === wanted) return new Uint8Array(await source.arrayBuffer());
+
+    // An animated image has frames but no tracks, so the media library refuses it and the
+    // animation engine is the only thing that can turn it into a real video. That
+    // re-encode is the honest price of asking an animation to be a movie, and the loss
+    // model already reports the conversion as one.
+    if (ANIMATED_CONTAINERS.has(sniffed)) {
+      const encoded = await this.animation.run({
+        ...request,
+        input: source,
+        target: container,
+        ...(signal ? { signal } : {}),
+      });
+      return new Uint8Array(await encoded.output.arrayBuffer());
+    }
 
     const result = await this.mediabunny.run({
       ...request,
@@ -325,6 +368,33 @@ export class LivePhotoEngine implements Engine {
       target: container,
       ...(signal ? { signal } : {}),
     });
+    return new Uint8Array(await result.output.arrayBuffer());
+  }
+
+  /**
+   * Which kind of frame source a bare input offers.
+   *
+   * Decided by the container rather than by trying one reader and catching its failure.
+   * A GIF handed to the media library fails from somewhere deep inside it, and an error
+   * whose origin we cannot name is not one this project is willing to attribute.
+   */
+  async #frameSource(input: Blob): Promise<FrameSource> {
+    const head = new Uint8Array(await input.slice(0, 64).arrayBuffer());
+    return ANIMATED_CONTAINERS.has(sniff(head).container) ? 'animation' : 'video';
+  }
+
+  /** The still half for a source that is not already a bundle. */
+  async #stillFromFrame(
+    input: Blob,
+    request: EngineRequest,
+    source: FrameSource,
+  ): Promise<Uint8Array> {
+    if (source === 'video') return this.#stillFromVideo(input, request);
+
+    // The first frame is what a viewer already sees before pressing anything, which makes
+    // it the honest choice — and the image engine knows how to lift one out of every
+    // animated format this project accepts.
+    const result = await this.image.run({ ...request, input, target: 'jpeg' });
     return new Uint8Array(await result.output.arrayBuffer());
   }
 

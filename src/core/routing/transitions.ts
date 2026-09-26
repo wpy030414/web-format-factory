@@ -47,8 +47,12 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     jpeg: { kind: 'project', projector: 'keyframe' },
     webp: { kind: 'project', projector: 'keyframe' },
     png: { kind: 'project', projector: 'keyframe' },
-    'live-photo': { kind: 'impossible', reason: 'needs-motion-component' },
-    'motion-photo': { kind: 'impossible', reason: 'needs-motion-component' },
+    // A frame sequence already *is* both halves a Live Photo asks for. Its first frame
+    // stands in for the photograph — the same compromise a bare video makes — and the
+    // frames themselves re-encode into the short video the pairing needs. Nothing is
+    // invented, which is the whole test this project sets for itself.
+    'live-photo': { kind: 'project', projector: 'repack-live' },
+    'motion-photo': { kind: 'project', projector: 'repack-live' },
   },
 
   /* ---- still image ----------------------------------------------------- */
