@@ -17,6 +17,7 @@ import { describeProfile, formatSize } from '@/core/probe/profile.ts';
 import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
 import { planAllTargets, planFor } from '@/core/routing/resolve.ts';
 import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
+import type { JobPhase, JobProgress } from '@/engines/types.ts';
 import { resultFiles, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
 import { canSaveToFolder, saveFiles } from '@/lib/save.ts';
@@ -36,6 +37,47 @@ const FAMILY_LABELS: Record<string, string> = {
   audio: '音频',
   live: 'Live Photo',
 };
+
+/** What a phase means when the engine gives no wording of its own. */
+const PHASE_LABELS: Record<JobPhase, string> = {
+  'loading-engine': '正在加载引擎',
+  probing: '正在读取',
+  decoding: '正在解码',
+  encoding: '正在编码',
+  muxing: '正在封装',
+  finalizing: '正在收尾',
+  verifying: '正在校验',
+};
+
+/**
+ * What to say while a job runs.
+ *
+ * Exported so the honesty rules can be unit-tested without a DOM: a percentage may only
+ * appear when the engine actually reported one, a frame count when it actually reported
+ * frames, and the reason a bar is indeterminate is never invented. The copy this replaced
+ * claimed 「流复制，无法预估进度」 for every ratio-less report — but a stream copy is the one
+ * case that *does* report a ratio, and the engines that leave it undefined (the image
+ * stack, frames→video, Live Photo's phase markers) are not stream copies at all.
+ */
+export function progressCaption(progress: JobProgress | undefined, copying: boolean): string {
+  if (!progress) return '转换中…';
+
+  const pct = progress.ratio === undefined ? null : Math.round(progress.ratio * 100);
+  if (pct !== null) {
+    // The engine's own label wins when it has one — it knows which engine is running.
+    if (progress.label) return `${progress.label} ${pct}%`;
+    return copying ? `无损复制中 ${pct}%` : `转换中 ${pct}%`;
+  }
+
+  if (progress.frames) {
+    return progress.frames.total > 0
+      ? `正在取帧 ${progress.frames.done} / ${progress.frames.total}`
+      : `正在取帧（已 ${progress.frames.done} 帧）`;
+  }
+
+  if (progress.label) return `${progress.label}…`;
+  return `${PHASE_LABELS[progress.phase]}…`;
+}
 
 export function FileCard({ entry }: { entry: FileEntry }) {
   const setTarget = useStore((s) => s.setTarget);
@@ -291,7 +333,7 @@ export function FileCard({ entry }: { entry: FileEntry }) {
         </>
       )}
 
-      <StatusLine entry={entry} />
+      <StatusLine entry={entry} copying={active?.did === 'transmux'} />
     </li>
   );
 }
@@ -370,15 +412,20 @@ function PlanSummary({ plan }: { plan: ReturnType<typeof planFor> }) {
   );
 }
 
-function StatusLine({ entry }: { entry: FileEntry }) {
+function StatusLine({ entry, copying }: { entry: FileEntry; copying: boolean }) {
   if (entry.status === 'running') {
-    const pct = entry.progress === undefined ? null : Math.round(entry.progress * 100);
+    const pct =
+      entry.progress?.ratio === undefined ? null : Math.round(entry.progress.ratio * 100);
     return (
       <div className="mt-3">
-        <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
+        <div
+          data-testid="progress"
+          className="bg-muted h-1.5 w-full overflow-hidden rounded-full"
+        >
           {pct === null ? (
-            // Indeterminate is a real state — a stream copy has no known duration, and a
-            // fabricated percentage would be a lie.
+            // Indeterminate is a real state — the engine has not reported a ratio, and a
+            // fabricated percentage would be a lie. But the reason is only ever the one the
+            // engine gave us, and the caption says which.
             <div className="bg-primary h-full w-1/3 animate-pulse rounded-full" />
           ) : (
             <div
@@ -387,8 +434,8 @@ function StatusLine({ entry }: { entry: FileEntry }) {
             />
           )}
         </div>
-        <p className="text-muted-foreground mt-1 text-xs">
-          {pct === null ? '转换中（流复制，无法预估进度）' : `转换中 ${pct}%`}
+        <p data-testid="progress-caption" className="text-muted-foreground mt-1 text-xs">
+          {progressCaption(entry.progress, copying)}
         </p>
       </div>
     );

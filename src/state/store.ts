@@ -3,6 +3,7 @@ import { MediaEngineClient, asEngineError } from '../engines/client.ts';
 import { saveFiles } from '../lib/save.ts';
 import { triggerDownload } from '../lib/download.ts';
 import type { ConvertOutcome } from '../engines/client.ts';
+import type { JobProgress } from '../engines/types.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
 import { FORMATS } from '../core/registry/formats.ts';
 import { pairLivePhotos, type PairingCandidate } from '../livephoto/detect.ts';
@@ -21,7 +22,13 @@ export interface FileEntry {
   profile: MediaProfile | null;
   status: FileStatus;
   target: FormatId | null;
-  progress?: number;
+  /**
+   * The latest word from the engine, kept whole.
+   *
+   * Not a bare ratio: the phase, the label and the frame count are what let the card say
+   * what is happening while there is no percentage to show.
+   */
+  progress?: JobProgress;
   did?: 'transmux' | 'transcode';
   result?: {
     blob: Blob;
@@ -113,6 +120,41 @@ export const useStore = create<State>((set, get) => {
     return created;
   };
 
+  /**
+   * Coalesce progress reports to one update per animation frame.
+   *
+   * Reports arrive once per packet, and each one would otherwise map the entire file list
+   * and re-render every card: a measured 512 MB container copy emits 17,242 of them inside
+   * 440 ms. Dropping the values in between costs nothing — only the latest is ever drawn —
+   * and collapsing them to one per frame turns those 17,242 updates into 18.
+   */
+  const pendingProgress = new Map<string, JobProgress>();
+  let progressFrame: number | null = null;
+
+  const flushProgress = (): void => {
+    progressFrame = null;
+    if (pendingProgress.size === 0) return;
+    const batch = new Map(pendingProgress);
+    pendingProgress.clear();
+    set((s) => ({
+      files: s.files.map((f) => {
+        const progress = batch.get(f.id);
+        return progress ? { ...f, progress } : f;
+      }),
+    }));
+  };
+
+  const reportProgress = (id: string, progress: JobProgress): void => {
+    pendingProgress.set(id, progress);
+    if (progressFrame !== null) return;
+    // No frame clock means no renderer to spare — land it immediately rather than lose it.
+    if (typeof requestAnimationFrame !== 'function') {
+      flushProgress();
+      return;
+    }
+    progressFrame = requestAnimationFrame(flushProgress);
+  };
+
   /** Run one file's conversion to completion, updating state as it goes. */
   const runOne = async (entry: FileEntry): Promise<void> => {
     const state = get();
@@ -137,10 +179,7 @@ export const useStore = create<State>((set, get) => {
         fileName: entry.file.name,
         target: entry.target,
         params: entry.params ?? {},
-        onProgress: (ratio) =>
-          set((s) => ({
-            files: s.files.map((f) => (f.id === entry.id ? { ...f, progress: ratio } : f)),
-          })),
+        onProgress: (progress) => reportProgress(entry.id, progress),
       });
 
       set((s) => ({

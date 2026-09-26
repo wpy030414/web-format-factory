@@ -1,6 +1,7 @@
 import type { FormatId } from '../core/types.ts';
 import type { LossItem } from '../core/loss/codes.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
+import type { JobProgress } from './types.ts';
 import type { FromWorker, ToWorker } from '../workers/media.worker.ts';
 
 export interface ConvertOptions {
@@ -9,7 +10,14 @@ export interface ConvertOptions {
   fileName: string;
   target: FormatId;
   params: Record<string, unknown>;
-  onProgress?: (ratio: number | undefined) => void;
+  /**
+   * The whole `JobProgress`, not just its ratio.
+   *
+   * Narrowing it here to a number would throw away the phase, the label and the frame
+   * count — the only things that let the UI say what is actually happening while a job
+   * reports no percentage.
+   */
+  onProgress?: (progress: JobProgress) => void;
   signal?: AbortSignal;
 }
 
@@ -26,7 +34,7 @@ export interface ConvertOutcome {
 interface PendingJob {
   resolve: (outcome: ConvertOutcome) => void;
   reject: (error: Error) => void;
-  onProgress?: (ratio: number | undefined) => void;
+  onProgress?: (progress: JobProgress) => void;
 }
 
 interface PendingProbe {
@@ -76,7 +84,7 @@ export class MediaEngineClient {
     if (!pending) return;
 
     if (msg.type === 'progress') {
-      pending.onProgress?.(msg.progress.ratio);
+      pending.onProgress?.(msg.progress);
       return;
     }
 

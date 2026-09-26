@@ -16,9 +16,11 @@ export interface JobProgress {
   /**
    * 0..1, or `undefined` for indeterminate work.
    *
-   * Indeterminate is a real state, not a failure to compute one — a stream copy has
-   * no known output duration, and a fabricated percentage is worse than an honest
-   * barber pole. The UI must render `undefined` as indeterminate.
+   * Indeterminate is a real state, not a failure to compute one: the image engine, the
+   * animation stack's frames→video path and Live Photo's phase markers never report a
+   * ratio. The UI must render `undefined` as indeterminate — and must not invent a reason
+   * for it. (A stream copy is *not* the reason: Mediabunny derives its ratio from track
+   * durations and reports one for copies just as it does for encodes.)
    */
   ratio?: number;
   label?: string;
