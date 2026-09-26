@@ -6,6 +6,15 @@ export interface LossContext {
   shape: RouteShape;
   sourceCodec?: CodecId;
   targetCodec?: CodecId;
+  /**
+   * Explicit losslessness when it is not codec-derived.
+   *
+   * Image formats have no codec field: PNG is lossless by construction, JPEG is lossy
+   * by construction, and neither fact is expressible as a `CodecId`. Without these
+   * overrides every image conversion would be reported as lossy, including PNG → PNG.
+   */
+  sourceLossless?: boolean;
+  targetLossless?: boolean;
   /** Does the source actually carry transparency? Absent/false ⇒ never warn about alpha. */
   sourceHasAlpha?: boolean;
   /** Can the target actually carry transparency? */
@@ -18,10 +27,21 @@ export interface LossContext {
   sourceHasHdr?: boolean;
   /** Did the pipeline bake EXIF orientation into pixels? */
   orientationBaked?: boolean;
+  /** Display name of the target, for messages when there is no codec to name. */
+  targetLabel?: string;
   /** Did the source carry metadata the target cannot express? */
   metadataDropped?: readonly LossCode[];
   /** Human-readable size of the source's frame sequence, when relevant. */
   sourceFrameCount?: number;
+}
+
+/** Whether the source discarded data, from a codec or an explicit override. */
+function sourceIsLossless(ctx: LossContext): boolean {
+  return ctx.sourceLossless ?? isLosslessCodec(ctx.sourceCodec);
+}
+
+function targetIsLossless(ctx: LossContext): boolean {
+  return ctx.targetLossless ?? isLosslessCodec(ctx.targetCodec);
 }
 
 /**
@@ -41,10 +61,7 @@ export function computeFidelity(ctx: LossContext): Fidelity {
   if (shape.mediaClass === 'changed') return 'projection';
   if (shape.payload === 'preserved') return 'lossless';
 
-  const targetLossless = isLosslessCodec(ctx.targetCodec);
-  const sourceLossless = isLosslessCodec(ctx.sourceCodec);
-
-  return targetLossless && sourceLossless ? 'lossless' : 'lossy';
+  return targetIsLossless(ctx) && sourceIsLossless(ctx) ? 'lossless' : 'lossy';
 }
 
 /**
@@ -68,11 +85,11 @@ export function computeLosses(ctx: LossContext): LossItem[] {
 
   /* --- the honesty code ------------------------------------------------- */
   // A lossy source re-encoded into a lossless target gains nothing and gets bigger.
-  if (!isLosslessCodec(ctx.sourceCodec) && isLosslessCodec(ctx.targetCodec)) {
+  if (!sourceIsLossless(ctx) && targetIsLossless(ctx)) {
     add(
       'generation-loss-from-lossy-source',
-      `${label(ctx.targetCodec)} is lossless, but the source already discarded data. ` +
-        `The file will be larger with no quality gain.`,
+      `${label(ctx.targetCodec, ctx.targetLabel)}是无损的，但源文件已经丢过数据了。` +
+        `文件会更大，音质或画质不会变好。`,
     );
   }
 
@@ -80,22 +97,22 @@ export function computeLosses(ctx: LossContext): LossItem[] {
   if (ctx.sourceHasAlpha && ctx.targetSupportsAlpha === false) {
     add(
       'alpha-flattened',
-      'Transparency will be composited onto an opaque background. This cannot be undone.',
+      '透明区域会被叠到白色背景上，此操作不可撤销。',
     );
   }
 
   /* --- HDR -------------------------------------------------------------- */
   if (ctx.sourceHasHdr) {
-    add('hdr-tonemapped', 'High dynamic range will be converted to standard range.');
+    add('hdr-tonemapped', '高动态范围会被压缩为普通范围。');
   }
 
   /* --- structure -------------------------------------------------------- */
   const srcTracks = ctx.sourceAudioTracks ?? 0;
   const maxTracks = ctx.targetMaxAudioTracks ?? 0;
   if (srcTracks > maxTracks && maxTracks > 0) {
-    add('extra-tracks-dropped', `${srcTracks - maxTracks} of ${srcTracks} audio tracks`);
+    add('extra-tracks-dropped', `${srcTracks} 条音轨中的 ${srcTracks - maxTracks} 条`);
   } else if (srcTracks > 0 && maxTracks === 0) {
-    add('extra-tracks-dropped', `all ${srcTracks} audio tracks`);
+    add('extra-tracks-dropped', `全部 ${srcTracks} 条音轨`);
   }
 
   if (shape.mediaClass === 'changed') {
@@ -130,9 +147,9 @@ const CODEC_LABELS: Partial<Record<CodecId, string>> = {
   vp9: 'VP9',
 };
 
-function label(codec: CodecId | undefined): string {
-  if (!codec) return 'The target format';
-  return CODEC_LABELS[codec] ?? codec;
+function label(codec: CodecId | undefined, fallback?: string): string {
+  if (codec) return CODEC_LABELS[codec] ?? codec;
+  return fallback ?? '目标格式';
 }
 
 /** True when the user must explicitly acknowledge before we proceed. */

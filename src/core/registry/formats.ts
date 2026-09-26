@@ -200,7 +200,9 @@ const webp: FormatSpec = {
     animation: 'none',
     alpha: 'full',
     multitrack: false,
-    losslessMode: true,
+    // WebP *can* be encoded losslessly, but the default path (and the only one we
+    // expose) is lossy. Claiming otherwise would make WebP → WebP report as lossless.
+    losslessMode: false,
     metadata: true,
   },
   params: [QUALITY],

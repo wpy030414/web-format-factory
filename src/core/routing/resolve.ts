@@ -2,7 +2,7 @@ import { computeFidelity, computeLosses, requiresAcknowledgement } from '../loss
 import type { LossItem } from '../loss/codes.ts';
 import { getFormat } from '../registry/formats.ts';
 import type { MediaProfile } from '../probe/profile.ts';
-import type { Fidelity, FormatId, RouteShape } from '../types.ts';
+import type { ContainerId, Fidelity, FormatId, RouteShape } from '../types.ts';
 import { IMPOSSIBILITY_COPY, type Impossibility } from './impossibility.ts';
 import { alternativesFor, verdictFor, type Verdict } from './transitions.ts';
 import { ALL_FORMAT_IDS, FORMATS } from '../registry/formats.ts';
@@ -108,10 +108,18 @@ export function planFor(
   const targetCodec = spec.codecs.video?.[0] ?? spec.codecs.audio?.[0];
   const sourceCodec = sourceVideo?.codec ?? sourceAudio?.codec;
 
+  // Image formats carry no codec field, so their losslessness comes from the format's
+  // own traits: PNG preserves every sample, JPEG discards some by construction.
+  const sourceLossless = sourceCodec ? undefined : sourceContainerIsLossless(profile.container);
+  const targetLossless = targetCodec ? undefined : spec.traits.losslessMode;
+
   const losses = computeLosses({
     shape,
     ...(sourceCodec ? { sourceCodec: sourceCodec as never } : {}),
     ...(targetCodec ? { targetCodec } : {}),
+    ...(sourceLossless !== undefined ? { sourceLossless } : {}),
+    ...(targetLossless !== undefined ? { targetLossless } : {}),
+    targetLabel: spec.label,
     sourceHasAlpha: profile.hasAlpha === true,
     targetSupportsAlpha: spec.traits.alpha !== 'none',
     sourceAudioTracks: profile.audioTracks.length,
@@ -122,6 +130,8 @@ export function planFor(
     shape,
     ...(sourceCodec ? { sourceCodec: sourceCodec as never } : {}),
     ...(targetCodec ? { targetCodec } : {}),
+    ...(sourceLossless !== undefined ? { sourceLossless } : {}),
+    ...(targetLossless !== undefined ? { targetLossless } : {}),
   });
 
   return {
@@ -134,6 +144,16 @@ export function planFor(
     did: copyable ? 'transmux' : 'transcode',
     needsAcknowledgement: requiresAcknowledgement(losses),
   };
+}
+
+/**
+ * Losslessness of a *source* container, for the formats that carry no codec.
+ *
+ * Only images are in this position. PNG (and therefore APNG) preserves every sample;
+ * JPEG, GIF and WebP all discard some by construction at their default settings.
+ */
+function sourceContainerIsLossless(container: ContainerId | 'unknown'): boolean {
+  return container === 'png';
 }
 
 /** Convenience: plans for every target, used to render the picker. */

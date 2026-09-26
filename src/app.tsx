@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { Play, Download, Trash2, Loader2, ShieldCheck } from 'lucide-react';
+import { planFor } from '@/core/routing/resolve.ts';
 import { useStore } from '@/state/store.ts';
 import { Dropzone } from '@/ui/dropzone.tsx';
 import { FileCard } from '@/ui/file-card.tsx';
@@ -19,15 +20,31 @@ export function App() {
     [addFiles],
   );
 
-  const readyCount = files.filter(
-    (f) =>
-      f.profile &&
-      f.target &&
-      f.status !== 'done' &&
-      f.status !== 'running' &&
-      f.status !== 'queued',
-  ).length;
+  const isActionable = useCallback(
+    (f: (typeof files)[number]): boolean => {
+      if (!f.profile || !f.target) return false;
+      if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
+      const plan = planFor(f.profile, f.target);
+      if (!plan.feasible) return false;
+      // A file waiting on acknowledgement is not ready. Counting it as ready would
+      // enable a button that then does nothing at all — a silent no-op, which is worse
+      // than a disabled button, because the user has no idea why nothing happened.
+      if (plan.needsAcknowledgement && !f.acknowledged) return false;
+      return true;
+    },
+    [files],
+  );
+
+  const readyCount = files.filter(isActionable).length;
   const doneCount = files.filter((f) => f.status === 'done').length;
+
+  // Kept separate so the UI can explain the wait instead of just refusing.
+  const awaitingAck = files.filter((f) => {
+    if (!f.profile || !f.target) return false;
+    if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
+    const plan = planFor(f.profile, f.target);
+    return plan.feasible && plan.needsAcknowledgement && !f.acknowledged;
+  }).length;
   const blocked = files.filter(
     (f) => f.status === 'ready' && f.profile && (!f.target || f.profile.mediaClass === 'unknown'),
   ).length;
@@ -81,6 +98,12 @@ export function App() {
               <Trash2 className="size-3.5" />
               清除已完成
             </button>
+
+            {awaitingAck > 0 && (
+              <span className="text-muted-foreground text-xs">
+                {awaitingAck} 个文件等待确认
+              </span>
+            )}
 
             {blocked > 0 && (
               <span className="text-muted-foreground ml-auto text-xs">

@@ -115,7 +115,7 @@ describe('computeLosses — computed against a real context, never speculative',
       targetMaxAudioTracks: 2,
     });
     const dropped = items.find((i) => i.code === 'extra-tracks-dropped');
-    expect(dropped?.detail).toBe('3 of 5 audio tracks');
+    expect(dropped?.detail).toBe('5 条音轨中的 3 条');
   });
 
   it('does not flag requantizing when the payload is preserved', () => {

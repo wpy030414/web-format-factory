@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { MediabunnyEngine } from '../engines/mediabunny/index.ts';
-import type { EngineRequest, JobProgress } from '../engines/types.ts';
+import { ImageEngine } from '../engines/image/index.ts';
+import { EngineError, type Engine, type EngineRequest, type JobProgress } from '../engines/types.ts';
 import { probe } from '../core/probe/probe.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
 import type { FormatId } from '../core/types.ts';
@@ -42,7 +43,21 @@ export type FromWorker =
     }
   | { type: 'error'; jobId: string; message: string; code: string };
 
-const engine = new MediabunnyEngine();
+const engines: Engine[] = [new ImageEngine(), new MediabunnyEngine()];
+
+/**
+ * Pick the engine for a target.
+ *
+ * Order is the tier order: the cheapest engine that can do the job wins. Images need
+ * no WASM and no media library, so the still-image engine goes first.
+ */
+function engineFor(target: FormatId): Engine {
+  const engine = engines.find((e) => e.supports(target));
+  if (!engine) {
+    throw new EngineError(`没有可以输出 ${target} 的引擎`, 'unsupported');
+  }
+  return engine;
+}
 
 /** One AbortController per in-flight job, so cancellation is precise. */
 const controllers = new Map<string, AbortController>();
@@ -81,7 +96,7 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
   };
 
   try {
-    const result = await engine.run(request);
+    const result = await engineFor(target).run(request);
     post({
       type: 'done',
       jobId,

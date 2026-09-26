@@ -3,7 +3,14 @@ import { ALL_FORMATS, BlobSource, Input, type InputTrack } from 'mediabunny';
 import type { ContainerId } from '../types.ts';
 import { classify } from './classify.ts';
 import type { AudioTrackInfo, MediaProfile, VideoTrackInfo } from './profile.ts';
-import { isAnimatedGif, isAnimatedWebp, isApng, sniff, SNIFF_BYTES } from './sniff.ts';
+import {
+  imageHasAlpha,
+  isAnimatedGif,
+  isAnimatedWebp,
+  isApng,
+  sniff,
+  SNIFF_BYTES,
+} from './sniff.ts';
 
 /**
  * The engine-backed probe.
@@ -61,6 +68,9 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
     return {
       ...base,
       ...(isAnimated !== undefined ? { isAnimated } : {}),
+      // Detected from the container bytes, so a transparent PNG converted to JPEG
+      // raises a critical warning instead of silently turning transparent areas white.
+      hasAlpha: imageHasAlpha(head, sniffed.container),
       mediaClass: classify({
         container: sniffed.container,
         ...(isAnimated !== undefined ? { isAnimated } : {}),

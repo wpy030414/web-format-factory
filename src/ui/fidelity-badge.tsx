@@ -115,9 +115,8 @@ export const LOSS_COPY: Record<LossItem['code'], string> = {
   'bit-depth-reduced': '色彩位深将被降低',
   'sample-rate-changed': '音频采样率将改变',
   'channels-downmixed': '声道数将减少',
-  'generation-loss-from-lossy-source':
-    '源文件已经有损，转为无损格式无法恢复音质，只会让文件更大',
-  'alpha-flattened': '透明度将被丢弃，叠到不透明背景上，此操作不可撤销',
+  'generation-loss-from-lossy-source': '源文件已经有损，转无损格式并不会有画质或音质提升',
+  'alpha-flattened': '透明度将被丢弃',
   'alpha-dropped': '透明度将被丢弃',
   'hdr-tonemapped': '高动态范围将被压缩为普通范围',
   'orientation-baked': '照片方向将被固化进像素',

@@ -268,3 +268,137 @@ export function countGifFrames(bytes: Uint8Array): number {
 export function isAnimatedGif(bytes: Uint8Array): boolean {
   return countGifFrames(bytes) > 1;
 }
+
+/**
+ * Does this image carry transparency?
+ *
+ * Without this, converting a transparent PNG to JPEG produces no warning at all — and
+ * that is a `critical` loss the user cannot undo. Detection is per-format because each
+ * stores the flag somewhere different.
+ *
+ * Returns `false` for formats that cannot carry alpha at all (JPEG), so the caller can
+ * treat the answer as final rather than "unknown".
+ */
+export function imageHasAlpha(bytes: Uint8Array, container: ContainerId): boolean {
+  switch (container) {
+    case 'jpeg':
+      return false;
+
+    case 'png': {
+      // IHDR is the first chunk: 8 signature + 4 length + 4 type, so its data starts
+      // at 16. The colour type is the 10th byte of that data.
+      const colourType = bytes[25];
+      // 4 = greyscale + alpha, 6 = truecolour + alpha. Palette images (3) can also be
+      // transparent, via a tRNS chunk, which we check for separately.
+      if (colourType === 4 || colourType === 6) return true;
+      if (colourType === 3) return hasChunk(bytes, 'tRNS');
+      return hasChunk(bytes, 'tRNS');
+    }
+
+    case 'gif':
+      // Only for single-frame GIFs, and deliberately so.
+      //
+      // Animated GIFs routinely set the transparent-colour flag for *frame deltas* —
+      // "this pixel is unchanged from the previous frame" — so a fully opaque animation
+      // still declares transparency. Measured on this project's own fixture: ffmpeg's
+      // 10-frame `testsrc` GIF sets the flag on 9 of its 10 control extensions while
+      // containing no transparent pixel at all.
+      //
+      // Warning about lost transparency there would be a false alarm, and warning fatigue
+      // is what makes users stop reading the warnings that matter. A still GIF, by
+      // contrast, has no deltas to encode, so a transparent index in one is real.
+      return countGifFrames(bytes) <= 1 && gifHasTransparency(bytes);
+
+    case 'webp':
+      return webpHasAlpha(bytes);
+
+    default:
+      return false;
+  }
+}
+
+/** Walk a PNG's chunk list looking for a given chunk type. */
+function hasChunk(bytes: Uint8Array, wanted: string): boolean {
+  let off = 8;
+  while (off + 8 <= bytes.length) {
+    const len =
+      ((bytes[off]! << 24) | (bytes[off + 1]! << 16) | (bytes[off + 2]! << 8) | bytes[off + 3]!) >>>
+      0;
+    const type = ascii(bytes, off + 4, 4);
+    if (type === wanted) return true;
+    if (type === 'IDAT' && wanted !== 'tRNS') return false;
+    if (len > bytes.length) break;
+    off += 12 + len;
+  }
+  return false;
+}
+
+/** Scan a GIF's blocks for a graphic control extension with the transparency flag set. */
+function gifHasTransparency(bytes: Uint8Array): boolean {
+  if (!startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) return false;
+
+  let off = 6;
+  if (off + 7 > bytes.length) return false;
+  const packed = bytes[off + 4]!;
+  off += 7;
+  if ((packed & 0x80) !== 0) off += 3 * (1 << ((packed & 0x07) + 1));
+
+  while (off < bytes.length) {
+    const introducer = bytes[off]!;
+    if (introducer === 0x3b) break; // trailer
+
+    if (introducer === 0x21) {
+      const label = bytes[off + 1];
+      // 0xF9 is the graphic control extension: [0x21][0xF9][size=4][flags]…
+      if (label === 0xf9 && bytes[off + 3] !== undefined && (bytes[off + 3]! & 0x01) !== 0) {
+        return true;
+      }
+      let p = off + 2;
+      while (p < bytes.length) {
+        const size = bytes[p]!;
+        p += 1 + size;
+        if (size === 0) break;
+      }
+      off = p;
+      continue;
+    }
+
+    if (introducer === 0x2c) {
+      if (off + 10 > bytes.length) break;
+      const localPacked = bytes[off + 9]!;
+      let p = off + 10;
+      if ((localPacked & 0x80) !== 0) p += 3 * (1 << ((localPacked & 0x07) + 1));
+      p += 1;
+      while (p < bytes.length) {
+        const size = bytes[p]!;
+        p += 1 + size;
+        if (size === 0) break;
+      }
+      off = p;
+      continue;
+    }
+
+    break;
+  }
+  return false;
+}
+
+/** WebP keeps its alpha flag in the extended-format header, or inside a VP8L stream. */
+function webpHasAlpha(bytes: Uint8Array): boolean {
+  if (!startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) || ascii(bytes, 8, 4) !== 'WEBP') return false;
+
+  const fourcc = ascii(bytes, 12, 4);
+
+  if (fourcc === 'VP8X') {
+    // [fourcc][size][flags:1]… — bit 4 (0x10) is the alpha flag.
+    return ((bytes[20] ?? 0) & 0x10) !== 0;
+  }
+  if (fourcc === 'VP8L') {
+    // Lossless streams carry a 5-bit header where bit 4 of the first byte after the
+    // signature indicates alpha.
+    const b = bytes[21];
+    return b === undefined ? false : (b & 0x10) !== 0;
+  }
+  // `VP8 ` (simple lossy) has no alpha channel.
+  return false;
+}

@@ -241,3 +241,90 @@ test.describe('端到端转换并校验产物', () => {
     expect(probe.codecs).toContain('aac');
   });
 });
+
+test.describe('图像转换', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('PNG → JPEG：产物是一张真正的 JPEG', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'still.png');
+    expect(await waitForClass(page)).toBe('静态图像');
+
+    const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
+    expect(ffprobe(saved).codecs).toContain('mjpeg');
+  });
+
+  test('PNG → WebP：产物是一张 WebP', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'still.png');
+    await waitForClass(page);
+
+    const saved = await convertAndSave(page, 'WebP', 'out.webp');
+    expect(ffprobe(saved).codecs).toContain('webp');
+  });
+
+  test('JPEG → PNG：目标无损，但源已经丢过数据，所以仍报有损', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'still.jpg');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'PNG', exact: true }).click();
+
+    // PNG preserves every sample, yet the source is a JPEG that already discarded some.
+    // Reporting "lossless" here would be technically true of the encoder and a lie about
+    // the file — this is the honesty rule the whole loss model exists to enforce.
+    const plan = page.getByTestId('plan-summary');
+    await expect(plan.getByText('有损', { exact: true })).toBeVisible();
+    await expect(plan.getByText(/丢过数据|不会变好/)).toBeVisible();
+
+    await page.getByRole('button', { name: /开始转换/ }).click();
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 60_000 });
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.png');
+    await download.saveAs(saved);
+    expect(ffprobe(saved).codecs).toContain('png');
+  });
+
+  test('带透明的 PNG 转 JPEG 会警告，并要求确认后才放行', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'alpha.png');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'JPEG', exact: true }).click();
+
+    // JPEG has no alpha channel, so this loss is real and irreversible — it must be
+    // stated, and it must gate the button rather than happening silently.
+    const plan = page.getByTestId('plan-summary');
+    await expect(plan.getByText(/透明度将被丢弃/)).toBeVisible();
+    await expect(plan.getByText('需确认')).toBeVisible();
+
+    const convert = page.getByRole('button', { name: /开始转换/ });
+    await expect(convert).toBeDisabled();
+
+    // Only after acknowledging does it become possible.
+    await page.getByRole('checkbox').check();
+    await expect(convert).toBeEnabled();
+  });
+
+  test('带透明的 PNG 转 WebP 不会警告，因为 WebP 支持透明', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'alpha.png');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'WebP', exact: true }).click();
+    const plan = page.getByTestId('plan-summary');
+
+    // WebP carries alpha natively, so there is nothing to warn about. Its default
+    // encoding is still lossy, so the fidelity badge correctly reads 有损 — the point
+    // of this test is only that no transparency is lost.
+    await expect(plan).toBeVisible();
+    await expect(plan.getByText(/透明度将被丢弃/)).toHaveCount(0);
+  });
+});

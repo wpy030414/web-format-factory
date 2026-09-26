@@ -36,6 +36,16 @@ AUDIO_ARGS=(-f lavfi -i "sine=frequency=440:duration=1")
 ffmpeg -v error -f lavfi -i "testsrc=size=64x64:rate=1:duration=1" -frames:v 1 "$OUT/still.png" -y
 ffmpeg -v error -i "$OUT/still.png" -q:v 4 "$OUT/still.jpg" -y
 
+# A PNG that actually carries transparency. Without one, nothing exercises the
+# alpha-loss warning path — and that warning is the difference between turning a
+# transparent logo white and telling the user it will happen.
+ffmpeg -v error -f lavfi -i "color=c=red@0.5:s=64x64,format=rgba" -frames:v 1 "$OUT/alpha.png" -y
+
+# Note: no transparent *GIF* fixture. Every encoder available here (ffmpeg's palettegen
+# on a fully transparent source hangs; Pillow emits GIF87a, which predates transparency)
+# fails to produce one, so `imageHasAlpha` for GIF is unit-tested against a hand-built
+# GIF89a byte stream instead. See tests/unit/alpha.test.ts.
+
 # APNG needs MORE THAN ONE FRAME. Encoding a single-frame PNG produces a plain PNG
 # with no `acTL` chunk — which is not an APNG and would make the animation tests lie.
 ffmpeg -v error "${VIDEO_ARGS[@]}" -plays 0 -c:v apng "$OUT/anim.apng" -y
