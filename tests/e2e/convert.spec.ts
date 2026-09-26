@@ -121,6 +121,51 @@ async function convertAndSave(page: Page, targetLabel: string, saveAs: string): 
   return saved;
 }
 
+/** The ISO-BMFF major brand, which is what actually separates MOV from MP4. */
+function majorBrand(file: string): string {
+  // `ftyp` at offset 4, and the brand is the four characters after it. ffprobe's
+  // `format_name` cannot tell these two apart — it reports the same comma-separated list
+  // for both — so an artifact check that stops there would pass on the wrong container.
+  const head = readFileSync(file).subarray(0, 12);
+  return head.subarray(4, 8).toString('latin1') === 'ftyp' ? head.subarray(8, 12).toString('latin1') : '';
+}
+
+/**
+ * Run a conversion and save the artifact, keeping the name the app offered for it.
+ *
+ * Deliberately stops there. FFprobe is not called here because not every artifact is a
+ * media file — a `.livp` is a ZIP — and a helper that insisted on probing would decide
+ * for its callers what kind of thing they built.
+ *
+ * The wait is short on purpose. These fixtures are a few kilobytes and convert in well
+ * under a second when they work at all, so a generous timeout buys nothing and costs a
+ * great deal: a failing case that waits ninety seconds hides the failure and makes the
+ * suite look like it is merely slow.
+ */
+async function runConversion(
+  page: Page,
+  targetLabel: string,
+  saveAs: string,
+  waitMs = 30_000,
+): Promise<{ offeredName: string; path: string }> {
+  await page.getByRole('button', { name: targetLabel, exact: true }).click();
+  await page.getByRole('button', { name: /开始转换/ }).click();
+
+  const downloadButton = page.getByTestId('download-result').first();
+  await expect(downloadButton).toBeVisible({ timeout: waitMs });
+  const offeredName = (await downloadButton.textContent())?.trim() ?? '';
+
+  const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+  await downloadButton.click();
+  const download = await downloadPromise;
+
+  const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+  tmpDirs.push(dir);
+  const path = join(dir, saveAs);
+  await download.saveAs(path);
+  return { offeredName, path };
+}
+
 test.describe('页面与语义边界', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -523,6 +568,135 @@ test.describe('动图转换', () => {
 
     const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
     expect(ffprobe(saved).codecs).toContain('mjpeg');
+  });
+});
+
+test.describe('动图 ↔ 视频：整张矩阵', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  // The claim is that *any* animated image interconverts with *any* video container, so
+  // this enumerates the cross product rather than sampling it — three animated formats by
+  // four containers, none of them assumed to behave like the others.
+  //
+  // Every case checks the bytes: the container ffprobe reads out, the codec it names, and
+  // the ISO-BMFF brand where that is the only thing separating two of the targets. A file
+  // with the right extension would pass an extension check while holding one still frame,
+  // and MOV and MP4 report the *same* `format_name` — so neither of the easy checks would
+  // have caught either mistake.
+  //
+  // The other direction is covered by three tests that predate this block and assert more
+  // about each one than a matrix row could: 「视频 → GIF」, 「动态 WebP 编码」 and 「动态 PNG」.
+  // Three-by-four here, one-by-three there, and the direction is complete.
+  //
+  // No fallback engine is involved in any of the twelve, so the block needs no more
+  // headroom than a WebCodecs encode of a 64×64, ten-frame animation.
+  test.setTimeout(60_000);
+
+  const ANIMATIONS = [
+    { fixture: 'anim.gif', label: 'GIF' },
+    { fixture: 'anim.webp', label: '动态 WebP' },
+    { fixture: 'anim.apng', label: 'APNG' },
+  ];
+  const VIDEO_TARGETS = [
+    { label: 'MP4', ext: '.mp4', codec: 'h264', expectBrand: 'isom' },
+    { label: 'QuickTime MOV', ext: '.mov', codec: 'h264', expectBrand: 'qt  ' },
+    { label: 'Matroska', ext: '.mkv', codec: 'h264', formatName: 'matroska' },
+    { label: 'WebM', ext: '.webm', codec: 'vp9', formatName: 'webm' },
+  ];
+
+  for (const animation of ANIMATIONS) {
+    for (const target of VIDEO_TARGETS) {
+      test(`${animation.label} → ${target.label}：产物是真正的视频`, async ({ page }) => {
+        await page.goto('/');
+        await dropFile(page, animation.fixture);
+        expect(await waitForClass(page)).toBe('动图');
+
+        const result = await runConversion(page, target.label, `out${target.ext}`);
+        const probe = ffprobe(result.path);
+
+        expect(result.offeredName, '应用自报的文件名').toMatch(
+          new RegExp(`${target.ext.replace('.', '\\.')}$`),
+        );
+        expect(probe.codecs, '编解码').toContain(target.codec);
+        if (target.formatName) {
+          expect(probe.formatName).toContain(target.formatName);
+        } else {
+          expect(majorBrand(result.path), '品牌').toBe(target.expectBrand);
+        }
+      });
+    }
+  }
+});
+
+test.describe('动图 → 成对形态', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  // A frame sequence already holds both halves a Live Photo asks for, so neither of these
+  // invents anything: the first frame is the still, and the frames themselves become the
+  // short video. That is the whole reason the route is open — refusing it would have meant
+  // calling impossible something whose every ingredient was already in the file.
+  test.setTimeout(300_000);
+
+  test('动图 → Motion Photo：静帧取第一帧，运动半是重新编码出来的 MP4', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'anim.gif');
+    expect(await waitForClass(page)).toBe('动图');
+
+    const result = await runConversion(page, 'Motion Photo', 'out.jpg');
+
+    // A JPEG at the front, and the XMP that tells a reader where the video starts.
+    const bytes = readFileSync(result.path);
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xff, 0xd8, 0xff]);
+    const text = bytes.toString('latin1');
+    expect(text).toContain('Camera:MotionPhoto="1"');
+
+    // The load-bearing property, re-derived here rather than asked of our own library:
+    // the offset counts back from the end of the file, so the position it names must be
+    // the start of a video container.
+    const offset = Number(/Camera:MicroVideoOffset="(\d+)"/.exec(text)?.[1]);
+    expect(offset).toBeGreaterThan(0);
+
+    const videoStart = bytes.length - offset;
+    expect(bytes.subarray(videoStart + 4, videoStart + 8).toString('latin1')).toBe('ftyp');
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const tail = join(dir, 'tail.mp4');
+    writeFileSync(tail, bytes.subarray(videoStart));
+    // A real MP4 holding a real H.264 picture — the animation engine encoded it from the
+    // GIF's frames rather than copying anything across.
+    const probed = ffprobe(tail);
+    expect(probed.formatName).toContain('mp4');
+    expect(probed.codecs).toContain('h264');
+  });
+
+  test('动图 → Live Photo：两半都取自动图，MOV 带上 Apple 的配对标识', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'anim.gif');
+    expect(await waitForClass(page)).toBe('动图');
+
+    const result = await runConversion(page, 'Live Photo', 'out.livp', 240_000);
+    expect(result.offeredName).toMatch(/\.livp$/);
+
+    // Verified with tools that share no code with ours: unzip the archive, then ask
+    // ffprobe whether the video half really carries the pairing identifier.
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+
+    const listing = execFileSync('unzip', ['-l', result.path], { encoding: 'utf8' });
+    expect(listing).toMatch(/\.jpg/);
+    expect(listing).toMatch(/\.mov/);
+
+    execFileSync('unzip', ['-o', '-q', result.path, '-d', dir]);
+    const movName = execFileSync('bash', ['-c', `cd ${dir} && ls *.mov`], { encoding: 'utf8' }).trim();
+    const tags = execFileSync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', join(dir, movName)],
+      { encoding: 'utf8' },
+    );
+    // Without this tag the two halves are not a pair, and no Apple device would treat
+    // the result as a Live Photo.
+    expect(tags).toContain('com.apple.quicktime.content.identifier');
   });
 });
 
