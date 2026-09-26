@@ -64,6 +64,48 @@ function ffprobeSize(file: string): { width: number; height: number } {
   return { width: width ?? 0, height: height ?? 0 };
 }
 
+/**
+ * The timing the artifact itself records.
+ *
+ * Apart from `ffprobe()` because most tests only care what a file *is*; this one is for the
+ * tests that care what it *does* over time. It reads the per-frame delays rather than only
+ * the total, because ten frames of 10 ms and one frame of 100 ms can be added up to look
+ * the same, and only the per-frame figures say whether the timing survived.
+ *
+ * `duration_time`, not `pkt_duration_time`: the latter is empty for both GIF and WebM, so
+ * asking for it yields a list of blanks — which reads as "no frames" and would let a test
+ * pass while asserting nothing.
+ *
+ * Not every container reports per-frame durations at all, so an empty list means "ffprobe
+ * did not say", never "zero frames".
+ */
+function ffprobeTiming(file: string): { durationSec: number; frameDurationSecs: number[] } {
+  // Two calls, not one. Asking for a `format` section and a `frame` section in the same
+  // command makes ffprobe return *empty* frame objects under `-of json` — a silent empty
+  // list, which is exactly what a test asserting on frame counts must not be handed.
+  const durationJson = execFileSync(
+    'ffprobe',
+    ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', file],
+    { encoding: 'utf8' },
+  );
+  const frameCsv = execFileSync(
+    'ffprobe',
+    ['-v', 'error', '-show_entries', 'frame=duration_time', '-of', 'csv=p=0', file],
+    { encoding: 'utf8' },
+  );
+
+  // One line per frame, blank where the container does not carry the field.
+  const frameDurationSecs = frameCsv
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /\d/.test(line))
+    .map(Number)
+    .filter((seconds) => Number.isFinite(seconds));
+
+  const parsed = JSON.parse(durationJson) as { format?: { duration?: string } };
+  return { durationSec: Number(parsed.format?.duration ?? '0'), frameDurationSecs };
+}
+
 /** Drop several fixtures at once, optionally renaming them. */
 async function dropFiles(
   page: Page,
@@ -655,6 +697,64 @@ test.describe('动图转换', () => {
     // The artifact must be a real GIF, not merely a file with the right name.
     const probe = ffprobe(saved);
     expect(probe.codecs).toContain('gif');
+
+    // And the timing has to have survived, which is the assertion this test was blind to.
+    // The engine used to hand the encoder centiseconds where it wanted milliseconds, so
+    // every frame was written with a zero delay — and a renderer stretches a zero delay to
+    // 100 ms. That is why this defect looked right in a browser for this particular 10 fps
+    // source while the file itself said 10 ms a frame; only the bytes gave it away.
+    const timing = ffprobeTiming(saved);
+    expect(timing.frameDurationSecs).toHaveLength(10);
+    expect(new Set(timing.frameDurationSecs)).toEqual(new Set([0.1]));
+    expect(timing.durationSec).toBeCloseTo(1, 1);
+  });
+
+  test('60 fps 视频 → GIF：保时长、丢弃装不下的帧，并如实报告', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'fast60.webm');
+    expect(await waitForClass(page)).toBe('视频');
+
+    await page.getByRole('button', { name: 'GIF', exact: true }).click();
+
+    // Sixty frames of 16.7 ms cannot be a GIF: a renderer stretches anything under 20 ms to
+    // 100 ms. Holding every frame for 20 ms instead would stretch one second into 1.2, so
+    // the surplus has to go — and the plan says so before the button is pressed, rather
+    // than leaving the user to notice that their 60 fps came out slower than it went in.
+    await expect(page.getByTestId('plan-summary').getByText(/部分帧将被丢弃/)).toBeVisible();
+
+    const saved = await convertAndSave(page, 'GIF', 'out.gif');
+
+    // One frame per 20 ms slot — the fastest a GIF can honestly play. The final slot
+    // absorbs whatever the clip's remainder was, so this is asserted as a range.
+    const timing = ffprobeTiming(saved);
+    expect(timing.frameDurationSecs).toHaveLength(50);
+    expect(Math.min(...timing.frameDurationSecs)).toBeCloseTo(0.02, 3);
+    expect(Math.max(...timing.frameDurationSecs)).toBeLessThanOrEqual(0.04);
+    // Dropping frames is *how* the duration is kept: it still lasts the second it was.
+    expect(timing.durationSec).toBeCloseTo(1, 1);
+  });
+
+  test('30 fps 视频 → GIF：时长对齐，并如实报告帧间隔被量化', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'fast30.webm');
+    expect(await waitForClass(page)).toBe('视频');
+
+    await page.getByRole('button', { name: 'GIF', exact: true }).click();
+
+    // 33.3 ms is not a whole number of the 10 ms steps a GIF delay is stored in.
+    const plan = page.getByTestId('plan-summary');
+    await expect(plan.getByText(/帧间隔将被量化/)).toBeVisible();
+    // And nothing is being picked out of a sequence here: every frame is carried over.
+    await expect(plan.getByText(/将从动态内容中选取一帧/)).toHaveCount(0);
+
+    const saved = await convertAndSave(page, 'GIF', 'out.gif');
+
+    // Every frame survives, and the rounding lands on the grid in a way that keeps the clip
+    // as long as the source was: thirty frames of 33.3 ms is one second, not 0.9.
+    const timing = ffprobeTiming(saved);
+    expect(timing.frameDurationSecs).toHaveLength(30);
+    expect(new Set(timing.frameDurationSecs)).toEqual(new Set([0.03, 0.04]));
+    expect(timing.durationSec).toBeCloseTo(1, 1);
   });
 
   test('GIF → 视频：产物是一个真正的 WebM', async ({ page }) => {
@@ -683,6 +783,10 @@ test.describe('动图转换', () => {
     const probe = ffprobe(saved);
     expect(probe.formatName).toContain('webm');
     expect(probe.codecs).toContain('vp9');
+
+    // A GIF's delay was read as centiseconds and divided by 100, so this clip used to come
+    // out ten times too long: one second of animation became ten seconds of video.
+    expect(ffprobeTiming(saved).durationSec).toBeCloseTo(1, 1);
   });
 
   test('GIF → 静图：取第一帧，并把这次投影如实标出来', async ({ page }) => {

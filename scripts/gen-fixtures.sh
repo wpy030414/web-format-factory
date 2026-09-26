@@ -85,6 +85,19 @@ ffmpeg -v error "${VIDEO_ARGS[@]}" "${AUDIO_ARGS[@]}" \
 ffmpeg -v error "${VIDEO_ARGS[@]}" "${AUDIO_ARGS[@]}" \
   -c:v libvpx-vp9 -b:v 200k -c:a libopus -shortest "$OUT/av.webm" -y
 
+# Sources on the far side of the 20 ms boundary a GIF's renderers impose.
+#
+# `fast60` needs a 16.7 ms frame interval — shorter than anything a GIF can show, so it is
+# the fixture that exercises conforming to 50 fps and reporting the frames that did not
+# fit. `fast30` is the other side of the same edge: every frame survives, but a 33.3 ms
+# interval only lands on the 10 ms delay grid on average, which is what the cumulative
+# alignment is for. VP9 like `av.webm`, so the test browser decodes both without a
+# licensed codec being present in the build.
+ffmpeg -v error -f lavfi -i "testsrc=size=64x64:rate=60:duration=1" \
+  -c:v libvpx-vp9 -b:v 200k "$OUT/fast60.webm" -y
+ffmpeg -v error -f lavfi -i "testsrc=size=64x64:rate=30:duration=1" \
+  -c:v libvpx-vp9 -b:v 200k "$OUT/fast30.webm" -y
+
 # ---------------------------------------------------------------------- audio
 ffmpeg -v error "${AUDIO_ARGS[@]}" -c:a libmp3lame "$OUT/tone.mp3" -y
 ffmpeg -v error "${AUDIO_ARGS[@]}" -c:a aac -f ipod "$OUT/tone.m4a" -y
