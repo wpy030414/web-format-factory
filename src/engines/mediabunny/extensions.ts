@@ -1,4 +1,5 @@
 import { canEncodeAudio, getFirstEncodableAudioCodec, type AudioCodec } from 'mediabunny';
+import { WASM_ENCODED_CODECS, type WasmEncodedCodec } from '../../core/codecs.ts';
 
 /**
  * The audio encoders the browser does not have.
@@ -16,7 +17,10 @@ import { canEncodeAudio, getFirstEncodableAudioCodec, type AudioCodec } from 'me
  * Registration is synchronous and invalidates the library's capability memo, so asking
  * `canEncodeAudio` afterwards gives the true post-registration answer.
  */
-const EXTENSIONS: Partial<Record<string, () => Promise<unknown>>> = {
+// Typed as a complete `Record`, not a `Partial`: the list of package-backed codecs and
+// the list of loaders have to be the same list, and this makes the compiler hold them
+// together rather than trusting two files to stay in step.
+const EXTENSIONS: Record<WasmEncodedCodec, () => Promise<unknown>> = {
   mp3: async () => (await import('@mediabunny/mp3-encoder')).registerMp3Encoder(),
   flac: async () => (await import('@mediabunny/flac-encoder')).registerFlacEncoder(),
   aac: async () => (await import('@mediabunny/aac-encoder')).registerAacEncoder(),
@@ -65,8 +69,8 @@ export async function primeAudioEncoder(target: AudioTarget): Promise<string | n
   // Nothing native. The extension packages are the only other source, and only three
   // codecs have one — anything else genuinely has no encoder here.
   for (const codec of candidates) {
-    const load = EXTENSIONS[codec];
-    if (!load) continue;
+    if (!hasExtension(codec)) continue;
+    const load = EXTENSIONS[codec as WasmEncodedCodec];
 
     onLoad?.(codec);
     try {
@@ -84,5 +88,8 @@ export async function primeAudioEncoder(target: AudioTarget): Promise<string | n
 
 /** Which codecs have a downloadable encoder. Used to explain a refusal precisely. */
 export function hasExtension(codec: string): boolean {
-  return codec in EXTENSIONS;
+  // Asked of the shared list rather than of this map: `EXTENSIONS` is typed as a complete
+  // `Record` over that list, so the two cannot disagree, and only one of them is a heavy
+  // import.
+  return (WASM_ENCODED_CODECS as readonly string[]).includes(codec);
 }

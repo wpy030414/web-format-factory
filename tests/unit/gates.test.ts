@@ -9,7 +9,7 @@ import {
 } from '@/core/routing/gates.ts';
 import { verdictFor } from '@/core/routing/transitions.ts';
 import type { MediaProfile } from '@/core/probe/profile.ts';
-import type { ContainerId, FormatId } from '@/core/types.ts';
+import type { CodecId, ContainerId, FormatId } from '@/core/types.ts';
 
 /**
  * The capability doors.
@@ -20,8 +20,31 @@ import type { ContainerId, FormatId } from '@/core/types.ts';
  * rather than one that explains itself.
  */
 
-const NOTHING: RouteCapabilities = { imageDecoder: false, crossOriginIsolated: false };
-const FULL: RouteCapabilities = { imageDecoder: true, crossOriginIsolated: true };
+/** Nothing works here. The codec door stays quiet unless a test names a codec. */
+const NOTHING: RouteCapabilities = {
+  imageDecoder: false,
+  crossOriginIsolated: false,
+  encodable: new Set(),
+};
+
+/** Everything works here. */
+const EVERY_CODEC = new Set<CodecId>([
+  'avc',
+  'hevc',
+  'vp8',
+  'vp9',
+  'av1',
+  'aac',
+  'opus',
+  'mp3',
+  'flac',
+  'vorbis',
+]);
+const FULL: RouteCapabilities = {
+  imageDecoder: true,
+  crossOriginIsolated: true,
+  encodable: EVERY_CODEC,
+};
 
 /** A track with just enough shape for the doors to judge it. */
 function track(codec: string, decodable: boolean) {
@@ -131,7 +154,7 @@ describe('image decoder door — 浏览器的取帧 API 缺席', () => {
     // The one animated format that survives on a machine with no image API at all. Its
     // Live Photo still needs the fallback engine for the pairing identifier — but that is
     // a different door, and with isolation on this is the route that remains.
-    const isolated: RouteCapabilities = { imageDecoder: false, crossOriginIsolated: true };
+    const isolated: RouteCapabilities = { imageDecoder: false, crossOriginIsolated: true, encodable: EVERY_CODEC };
     expect(shutGate(from('animated-image', 'gif', { target: 'live-photo', caps: isolated }))).toBeNull();
     expect(
       shutGate(from('animated-image', 'gif', { target: 'live-photo', caps: NOTHING }))?.reason,
@@ -148,7 +171,7 @@ describe('image decoder door — 浏览器的取帧 API 缺席', () => {
 
     // And once the engine is there, the remaining obstacle is the one that is left.
     expect(
-      shutGate(from('animated-image', 'webp', { ...both, caps: { imageDecoder: false, crossOriginIsolated: true } }))
+      shutGate(from('animated-image', 'webp', { ...both, caps: { ...NOTHING, crossOriginIsolated: true } }))
         ?.reason,
     ).toBe('no-decoder-in-browser');
     expect(shutGate(from('animated-image', 'webp', { ...both, caps: FULL }))).toBeNull();
@@ -240,6 +263,72 @@ describe('decoder door — 源解不开', () => {
   });
 });
 
+describe('encoder door — 点名要的编码，这里产不出来', () => {
+  /** A machine that can encode nothing at all — the harshest case the door may face. */
+  const NO_ENCODERS: RouteCapabilities = { ...FULL, encodable: new Set<CodecId>() };
+
+  it('用户没点名时，一律不管', () => {
+    // Choosing nothing hands the decision to the engine, which walks the target's codec
+    // list and takes the first one it can encode. There is no decision to second-guess,
+    // so there is nothing to refuse.
+    expect(shutGate(ctx({ params: {}, caps: NO_ENCODERS }))).toBeNull();
+    expect(shutGate(ctx({ params: { quality: 80 }, caps: NO_ENCODERS }))).toBeNull();
+  });
+
+  it('面板播种的默认值不算一次点名', () => {
+    // The panel seeds every control, so a codec sitting at its declared default is
+    // present in `params` without being a decision. Judging it would refuse a conversion
+    // the engine would have completed by picking something it can encode.
+    expect(shutGate(ctx({ target: 'mp4', params: { codec: 'avc' }, caps: NO_ENCODERS }))).toBeNull();
+    expect(shutGate(ctx({ target: 'mkv', params: { codec: 'avc' }, caps: NO_ENCODERS }))).toBeNull();
+  });
+
+  it('点名一个本机编不出来的编码，门就关了', () => {
+    // The H.265 option says so itself — 「更小，但只有 Apple 端能编码」 — and a control
+    // that admits it might not work is a control that should have been disabled.
+    const plan = ctx({ target: 'mp4', params: { codec: 'hevc' }, caps: NO_ENCODERS });
+    expect(shutGate(plan)?.reason).toBe('no-encoder-in-browser');
+    expect(shutGate(plan)?.detail).toBe('H.265');
+  });
+
+  it('点名一个本机编得出来的，门开着', () => {
+    const caps: RouteCapabilities = { ...FULL, encodable: new Set<CodecId>(['avc', 'hevc']) };
+    expect(shutGate(ctx({ target: 'mp4', params: { codec: 'hevc' }, caps }))).toBeNull();
+  });
+
+  it('还没测过时不判——没测过不等于没有', () => {
+    // `null` is a state of its own. An unmeasured machine is not a machine without
+    // encoders, and the window only spans the page mounting to the probe landing.
+    const unmeasured: RouteCapabilities = { ...FULL, encodable: null };
+    expect(shutGate(ctx({ target: 'mp4', params: { codec: 'hevc' }, caps: unmeasured }))).toBeNull();
+  });
+
+  it('Vorbis 归兜底引擎那道门管，这里不重复判决', () => {
+    // Vorbis has no browser encoder and was never going to be asked of one: the fallback
+    // engine writes it, and its door has already ruled. Judging it here would report the
+    // wrong reason for a route that is open precisely when isolation is on.
+    const isolated: RouteCapabilities = { ...NO_ENCODERS, crossOriginIsolated: true };
+    expect(shutGate(ctx({ target: 'ogg', params: { codec: 'vorbis' }, caps: isolated }))).toBeNull();
+
+    // And when isolation is missing, it is the *other* door that says so — which is why
+    // this one must not also speak.
+    const withoutIsolation: RouteCapabilities = { ...NOTHING, encodable: new Set() };
+    expect(shutGate(ctx({ target: 'ogg', params: { codec: 'vorbis' }, caps: withoutIsolation }))?.reason)
+      .toBe('engine-unavailable');
+  });
+
+  it('理由读得通', () => {
+    const gate = shutGate(ctx({ target: 'mp4', params: { codec: 'hevc' }, caps: NO_ENCODERS }))!;
+    const rendered = IMPOSSIBILITY_COPY[gate.reason].body({
+      reason: gate.reason,
+      detail: gate.detail,
+      alternatives: [],
+    });
+    expect(rendered).toContain('H.265');
+    expect(rendered).not.toMatch(/undefined|null/);
+  });
+});
+
 describe('planFor — 门落在计划上，而不是路由表上', () => {
   /** An animated WebP, the source class most of these doors are about. */
   const animatedWebp: MediaProfile = {
@@ -252,6 +341,32 @@ describe('planFor — 门落在计划上，而不是路由表上', () => {
     otherTrackCount: 0,
     isAnimated: true,
   };
+
+  /** Build a minimal profile for a container with the given codecs. */
+  function profileWith(
+    mediaClass: MediaProfile['mediaClass'],
+    opts: { video?: string[]; audio?: string[] } = {},
+  ): MediaProfile {
+    return {
+      name: 'x',
+      size: 1,
+      container: 'isobmff-mp4',
+      mediaClass,
+      videoTracks: (opts.video ?? []).map((codec) => ({
+        codec,
+        width: 1920,
+        height: 1080,
+        decodable: true,
+      })),
+      audioTracks: (opts.audio ?? []).map((codec) => ({
+        codec,
+        channels: 2,
+        sampleRate: 44100,
+        decodable: true,
+      })),
+      otherTrackCount: 0,
+    };
+  }
 
   /** A video whose picture codec this browser cannot decode. */
   const unplayable: MediaProfile = {
@@ -302,9 +417,26 @@ describe('planFor — 门落在计划上，而不是路由表上', () => {
     expect(reencode.impossibility?.detail).toBe('H.265');
   });
 
+  it('点名一个本机编不出来的编码，计划随之不可行', () => {
+    // The end-to-end shape of the door: the same file and the same target, decided by the
+    // codec the user named and by what this machine can do about it.
+    const source = profileWith('video', { video: ['avc'], audio: ['aac'] });
+    const noHevc: RouteCapabilities = { ...FULL, encodable: new Set<CodecId>(['avc', 'vp9']) };
+
+    const blocked = planFor(source, 'mp4', noHevc, { codec: 'hevc' });
+    expect(blocked.feasible).toBe(false);
+    expect(blocked.impossibility?.reason).toBe('no-encoder-in-browser');
+    expect(blocked.impossibility?.detail).toBe('H.265');
+    // Alternatives are still offered — a refusal that is a dead end is not a reason.
+    expect(blocked.impossibility?.alternatives).toContain('mkv' as FormatId);
+
+    const fine = planFor(source, 'mp4', FULL, { codec: 'hevc' });
+    expect(fine.feasible).toBe(true);
+  });
+
   it('可行性随门变化，而不是随格式对变化', () => {
     // The same conversion, two machines' worth of answers.
-    const withDecoder = planFor(animatedWebp, 'mov', { imageDecoder: true, crossOriginIsolated: false });
+    const withDecoder = planFor(animatedWebp, 'mov', { ...NOTHING, imageDecoder: true });
     const withoutDecoder = planFor(animatedWebp, 'mov', NOTHING);
     expect(withDecoder.feasible).toBe(true);
     expect(withoutDecoder.feasible).toBe(false);

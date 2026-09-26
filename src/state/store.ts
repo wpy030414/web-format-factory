@@ -7,7 +7,9 @@ import { pairLivePhotos, type PairingCandidate } from '../livephoto/detect.ts';
 import { buildLivp } from '../livephoto/pack.ts';
 import { planFor, type ResolvedPlan } from '../core/routing/resolve.ts';
 import { readRouteCapabilities, type RouteCapabilities } from '../core/routing/gates.ts';
-import type { FormatId } from '../core/types.ts';
+import { probeEncoders } from '../core/caps.ts';
+import { WASM_ENCODED_CODECS } from '../core/codecs.ts';
+import type { CodecId, FormatId } from '../core/types.ts';
 
 export type FileStatus = 'probing' | 'ready' | 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 
@@ -57,6 +59,13 @@ interface State {
    */
   caps: RouteCapabilities;
 
+  /**
+   * Measure what this machine can encode — the one capability that has to be probed
+   * rather than read — and fold the answer into `caps`.
+   *
+   * Called once, from the converter's first render.
+   */
+  measureCapabilities: () => void;
   addFiles: (files: File[]) => Promise<void>;
   removeFile: (id: string) => void;
   clearFinished: () => void;
@@ -215,6 +224,25 @@ export const useStore = create<State>((set, get) => {
     running: 0,
     engine: null,
     caps: readRouteCapabilities(),
+
+    measureCapabilities() {
+      void probeEncoders().then(({ video, audio }) => {
+        const encodable = new Set<CodecId>();
+
+        for (const table of [video, audio]) {
+          for (const [id, ok] of Object.entries(table)) {
+            if (ok === true) encodable.add(id as CodecId);
+          }
+        }
+
+        // Three codecs no browser can encode are still producible *here*, because the app
+        // carries its own encoders for them. Asking only the browser would report a
+        // capability this build has.
+        for (const id of WASM_ENCODED_CODECS) encodable.add(id);
+
+        set((s) => ({ caps: { ...s.caps, encodable } }));
+      });
+    },
 
     async addFiles(incoming) {
       await probeEntries(incoming.map(newEntry));

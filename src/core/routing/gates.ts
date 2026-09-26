@@ -1,20 +1,20 @@
-import type { FormatId } from '../types.ts';
+import type { CodecId, FormatId } from '../types.ts';
 import type { MediaProfile } from '../probe/profile.ts';
-import { getFormat } from '../registry/formats.ts';
+import { changedParams, getFormat } from '../registry/formats.ts';
 import { codecLabel } from '../codecs.ts';
 import type { Verdict } from './transitions.ts';
 
 /**
  * What this machine can actually run, in the respects routing cares about.
  *
- * Deliberately narrower than `Capabilities`. That type answers "what is this machine
- * like" for the diagnostic page, and almost all of it is worth *reporting* without
- * changing what may be offered. These are different in kind: each one decides whether
- * some engine can reach a target at all, so a route that ignores them is a button that
- * fails at the end of the job instead of a button that explains itself.
+ * Deliberately narrower than `Capabilities`. That type is the diagnostic page's whole
+ * report — worth *showing* in full, but almost none of it changes what may be offered.
+ * These do: each decides whether some engine can reach a target at all, so a route that
+ * ignores one is a button that fails at the end of the job instead of a button that
+ * explains itself.
  *
- * `Capabilities` structurally satisfies this, so the diagnostic page's full probe can be
- * handed straight to the planner.
+ * Two of them are facts about the environment that can simply be read; the third has to
+ * be measured, which is why it is allowed to be absent.
  */
 export interface RouteCapabilities {
   /**
@@ -31,27 +31,39 @@ export interface RouteCapabilities {
    * way for a conversion to go wrong.
    */
   crossOriginIsolated: boolean;
+  /**
+   * The codecs this build can produce, or `null` before the probe has answered.
+   *
+   * `null` is a state of its own and is not the empty set: an unmeasured machine is not a
+   * machine without encoders. The window it covers is the one between the page mounting
+   * and the probe landing, and no file can be in it — a file requires someone to drop one,
+   * and probing that file takes longer than this does.
+   */
+  encodable: ReadonlySet<CodecId> | null;
 }
 
 /**
- * Read the gates off the environment.
+ * Read the part of it that needs no measuring.
  *
- * Both answers are synchronous — an API's presence and a flag on `self` — so the planner
+ * These answers are synchronous — an API's presence and a flag on `self` — so the planner
  * never has to wait for a probe before it can say what it offers, and the store can hold
- * them from the first render. They are the same facts the diagnostic page reports; that
- * page and the picker must never disagree.
+ * them from the first render. `encodable` is not among them: it takes `isConfigSupported`,
+ * which is async, so the store probes it and folds the answer in. Both halves describe the
+ * same machine the diagnostic page reports on; that page and the picker must never
+ * disagree.
  */
 export function readRouteCapabilities(): RouteCapabilities {
   return {
     imageDecoder: typeof (globalThis as { ImageDecoder?: unknown }).ImageDecoder !== 'undefined',
     crossOriginIsolated: typeof self !== 'undefined' && self.crossOriginIsolated === true,
+    encodable: null,
   };
 }
 
 /** A route the semantics allow but this machine cannot run. */
 export interface ShutGate {
   /** Drawn from the existing impossibility vocabulary rather than invented anew. */
-  reason: 'no-decoder-in-browser' | 'engine-unavailable';
+  reason: 'no-decoder-in-browser' | 'no-encoder-in-browser' | 'engine-unavailable';
   /** A noun phrase the reason's copy slots into its sentence. */
   detail: string;
 }
@@ -86,7 +98,7 @@ type Door = (ctx: GateContext) => ShutGate | null;
  * Order matters when more than one is shut: the first one reported should be the one that
  * would stop the job first, so the reason shown is the one worth acting on.
  */
-const DOORS: readonly Door[] = [fallbackEngineDoor, imageDecoderDoor, decoderDoor];
+const DOORS: readonly Door[] = [fallbackEngineDoor, imageDecoderDoor, decoderDoor, encoderDoor];
 
 export function shutGate(ctx: GateContext): ShutGate | null {
   for (const door of DOORS) {
@@ -201,4 +213,38 @@ function decoderDoor({ profile, target, verdict, copyable }: GateContext): ShutG
   if (!blocked) return null;
 
   return { reason: 'no-decoder-in-browser', detail: codecLabel(blocked.codec) };
+}
+
+/**
+ * A codec the user asked for by name, that this machine cannot produce.
+ *
+ * Only ever about a codec the user *chose*. When they choose nothing, the engine decides
+ * for itself — it walks the target's codec list and takes the first one it can encode — so
+ * there is no decision to second-guess and nothing to refuse. A named codec is different:
+ * the engine will use exactly that one, and if this machine cannot encode it the job dies
+ * at the end. The H.265 option says as much out loud in its own label —
+ * 「更小，但只有 Apple 端能编码」 — and a control that admits it might not work is a control
+ * that should have been disabled.
+ *
+ * The names that can be chosen are all browser questions — see the registry's `codec`
+ * options — which is what makes the probed set the right thing to ask. The one exception
+ * is Vorbis, and its door has already ruled on it.
+ */
+function encoderDoor({ target, params, caps }: GateContext): ShutGate | null {
+  // A codec the user actually *chose*, which is not the same as one that is merely
+  // present: the panel seeds every control with its declared default, so a codec sitting
+  // at its default is in `params` without being a decision — and `changedParams` is what
+  // the engine itself reads to decide whether to force a re-encode.
+  const chosen = changedParams(target, params).codec;
+  if (typeof chosen !== 'string') return null;
+  if (!caps.encodable) return null;
+
+  // Vorbis is the fallback engine's to write, and that door has already decided — it only
+  // ever shuts when isolation is missing. Repeating the judgement here would report a
+  // missing browser encoder for something the browser was never going to be asked to do.
+  if (target === 'ogg' && chosen === 'vorbis') return null;
+
+  if (caps.encodable.has(chosen as CodecId)) return null;
+
+  return { reason: 'no-encoder-in-browser', detail: codecLabel(chosen) };
 }

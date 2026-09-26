@@ -46,6 +46,18 @@ export const CODECS: Partial<Record<CodecId, CodecProfile>> = {
   'webp-vp8': { label: 'WebP' },
 };
 
+/**
+ * Audio codecs with no encoder in any browser, supplied here as a WASM package instead.
+ *
+ * The list lives in this light module rather than only beside the downloaders, because
+ * routing has to know that "the browser cannot encode MP3" does not mean "this app cannot
+ * produce MP3" — asking only the browser would disable three targets that work.
+ */
+export const WASM_ENCODED_CODECS = ['mp3', 'flac', 'aac'] as const;
+
+/** One of the codecs a package supplies. */
+export type WasmEncodedCodec = (typeof WASM_ENCODED_CODECS)[number];
+
 /** The video codecs worth asking the browser about, in the order a UI should list them. */
 export const PROBED_VIDEO_CODECS: readonly CodecId[] = ['avc', 'hevc', 'vp8', 'vp9', 'av1'];
 

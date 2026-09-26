@@ -38,6 +38,14 @@ function Converter() {
   const startAll = useStore((s) => s.startAll);
   const downloadAll = useStore((s) => s.downloadAll);
   const clearFinished = useStore((s) => s.clearFinished);
+  const measureCapabilities = useStore((s) => s.measureCapabilities);
+
+  // The one capability that has to be measured rather than read. It only ever *closes*
+  // routes the user has not chosen a codec for yet, so nothing flashes: the picker is not
+  // on screen until a file has been dropped, which takes far longer than this does.
+  useEffect(() => {
+    measureCapabilities();
+  }, [measureCapabilities]);
 
   const onFiles = useCallback(
     (incoming: File[]) => {

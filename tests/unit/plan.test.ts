@@ -3,7 +3,7 @@ import type { MediaProfile } from '@/core/probe/profile.ts';
 import { planFor } from '@/core/routing/resolve.ts';
 import type { RouteCapabilities } from '@/core/routing/gates.ts';
 import { pickDefaultTarget } from '@/state/store.ts';
-import type { FormatId } from '@/core/types.ts';
+import type { CodecId, FormatId } from '@/core/types.ts';
 
 /**
  * Every route open.
@@ -13,7 +13,23 @@ import type { FormatId } from '@/core/types.ts';
  * optimistic set is passed explicitly rather than defaulted inside `planFor`, so which
  * question a test is asking is visible at the call site.
  */
-const CAPS: RouteCapabilities = { imageDecoder: true, crossOriginIsolated: true };
+const CAPS: RouteCapabilities = {
+  imageDecoder: true,
+  crossOriginIsolated: true,
+  // Every codec these tests name by hand. The door that reads this has its own file.
+  encodable: new Set<CodecId>([
+    'avc',
+    'hevc',
+    'vp8',
+    'vp9',
+    'av1',
+    'aac',
+    'opus',
+    'mp3',
+    'flac',
+    'vorbis',
+  ]),
+};
 
 /** Build a minimal profile for a container with the given codecs. */
 function profileWith(
