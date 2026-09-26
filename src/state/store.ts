@@ -249,12 +249,20 @@ export const useStore = create<State>((set, get) => {
 /**
  * A sensible default target, or `null` when nothing is feasible.
  *
- * Only ever picks something that actually works — defaulting to an impossible target
- * would present the user with a Convert button that refuses to do anything.
+ * Two rules, in order:
+ *
+ * 1. Never pick the format the file is already in — a default that re-encodes into the
+ *    same container is a no-op the user did not ask for.
+ * 2. Prefer a target that costs nothing. A container change is instant and lossless,
+ *    while crossing codecs is slow and lossy, so defaulting to a transcode when a free
+ *    option exists would give a poor first impression of the tool.
+ *
+ * Only ever picks something that actually works: defaulting to an impossible target
+ * would present a Convert button that refuses to do anything.
  */
-function pickDefaultTarget(profile: MediaProfile): FormatId | null {
+export function pickDefaultTarget(profile: MediaProfile): FormatId | null {
   const preferences: Record<string, FormatId[]> = {
-    video: ['mp4', 'webm', 'mkv'],
+    video: ['mp4', 'mkv', 'mov', 'webm'],
     audio: ['mp3', 'm4a', 'flac', 'wav'],
     'still-image': ['jpeg', 'png', 'webp'],
     'animated-image': ['gif', 'webp-anim', 'apng'],
@@ -262,17 +270,17 @@ function pickDefaultTarget(profile: MediaProfile): FormatId | null {
     unknown: [],
   };
 
-  for (const candidate of preferences[profile.mediaClass] ?? []) {
-    // Skip the format the file is already in: a default that re-encodes into the same
-    // container is a no-op the user did not ask for.
-    //
+  const candidates = (preferences[profile.mediaClass] ?? []).filter(
     // Compare via the format's declared containers, NOT by comparing the FormatId to the
     // ContainerId — `'mp4'` and `'isobmff-mp4'` are different vocabularies and can never
     // be equal, so that comparison silently never matched.
-    if (FORMATS[candidate].containers.includes(profile.container as never)) continue;
-    if (planFor(profile, candidate).feasible) return candidate;
-  }
-  return null;
+    (candidate) =>
+      !FORMATS[candidate].containers.includes(profile.container as never) &&
+      planFor(profile, candidate).feasible,
+  );
+
+  const free = candidates.find((c) => planFor(profile, c).did === 'transmux');
+  return free ?? candidates[0] ?? null;
 }
 
 export function triggerDownload(blob: Blob, name: string): void {

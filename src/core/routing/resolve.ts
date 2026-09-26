@@ -23,16 +23,41 @@ export interface ResolvedPlan {
   did?: 'transmux' | 'transcode';
 }
 
-/** Trimmed track sets, so the shape and the loss rules see the same facts. */
-function shapeFor(verdict: Verdict): RouteShape {
-  switch (verdict.kind) {
-    case 'direct':
-      return { payload: 'preserved', mediaClass: 'same' };
-    case 'project':
-      return { payload: 'reencoded', mediaClass: 'changed' };
-    case 'impossible':
-      return { payload: 'reencoded', mediaClass: 'same' };
-  }
+/**
+ * Decide whether the encoded data can actually be carried over untouched.
+ *
+ * This is NOT the same question as "does the target accept this media class". A `direct`
+ * verdict only means the target can hold this *kind* of content; MP3 into an M4A target
+ * is perfectly direct and yet PCM-free AAC cannot store MP3 frames, so the payload has
+ * to be re-encoded. Treating `direct` as "lossless" would tell the user a lossy
+ * conversion costs nothing — the exact lie this project exists to avoid.
+ *
+ * Every source codec must fit, not just the first: a video whose picture codec suits the
+ * target but whose audio codec does not still has to be re-encoded.
+ */
+function canCopyPayload(
+  profile: MediaProfile,
+  target: FormatId,
+  params: Readonly<Record<string, unknown>>,
+): boolean {
+  const spec = getFormat(target);
+  const supported = [...(spec.codecs.video ?? []), ...(spec.codecs.audio ?? [])] as string[];
+  if (supported.length === 0) return false; // image targets copy via other engines
+
+  const userForced =
+    params.forceTranscode === true ||
+    params.codec !== undefined ||
+    params.quality !== undefined ||
+    params.bitrate !== undefined;
+  if (userForced) return false;
+
+  const sourceCodecs = [
+    ...profile.videoTracks.map((t) => t.codec),
+    ...profile.audioTracks.map((t) => t.codec),
+  ];
+  if (sourceCodecs.length === 0) return false;
+
+  return sourceCodecs.every((codec) => supported.includes(codec));
 }
 
 /**
@@ -67,9 +92,16 @@ export function planFor(
   }
 
   const spec = getFormat(target);
-  const shape = shapeFor(verdict);
   const sourceVideo = profile.videoTracks[0];
   const sourceAudio = profile.audioTracks[0];
+
+  // Whether the bytes survive decides both the honesty verdict and the speed badge, so
+  // it is derived from codec compatibility — never assumed from the verdict kind.
+  const copyable = verdict.kind === 'direct' && canCopyPayload(profile, target, params);
+  const shape: RouteShape = {
+    payload: copyable ? 'preserved' : 'reencoded',
+    mediaClass: verdict.kind === 'project' ? 'changed' : 'same',
+  };
 
   // Which codec will the output carry? For a copy it is the source's; for a re-encode
   // it is whatever the target's default is. This drives the lossless-vs-lossy verdict.
@@ -84,9 +116,6 @@ export function planFor(
     targetSupportsAlpha: spec.traits.alpha !== 'none',
     sourceAudioTracks: profile.audioTracks.length,
     targetMaxAudioTracks: spec.traits.multitrack ? 8 : profile.audioTracks.length > 0 ? 1 : 0,
-    ...(profile.otherTrackCount > 0 && !spec.traits.multitrack
-      ? { metadataDropped: [] as const }
-      : {}),
   });
 
   const fidelity = computeFidelity({
@@ -95,19 +124,6 @@ export function planFor(
     ...(targetCodec ? { targetCodec } : {}),
   });
 
-  // A copy is possible when the source codecs fit the target container and no parameter
-  // asks for a re-encode. Mirrors the engine's own planning, so the UI can promise
-  // "instant and lossless" before the work starts rather than after.
-  const wantsReencode =
-    params.forceTranscode === true ||
-    params.codec !== undefined ||
-    params.quality !== undefined ||
-    params.bitrate !== undefined;
-  const codecsFit = sourceCodec
-    ? [...(spec.codecs.video ?? []), ...(spec.codecs.audio ?? [])].includes(sourceCodec as never)
-    : false;
-  const did = !wantsReencode && codecsFit ? 'transmux' : 'transcode';
-
   return {
     target,
     feasible: true,
@@ -115,7 +131,7 @@ export function planFor(
     shape,
     losses,
     fidelity,
-    did,
+    did: copyable ? 'transmux' : 'transcode',
     needsAcknowledgement: requiresAcknowledgement(losses),
   };
 }

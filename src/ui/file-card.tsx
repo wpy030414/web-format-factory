@@ -14,7 +14,7 @@ import { MEDIA_CLASS_LABELS } from '@/core/probe/classify.ts';
 import { describeProfile, formatSize } from '@/core/probe/profile.ts';
 import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
 import { planAllTargets, planFor } from '@/core/routing/resolve.ts';
-import type { FormatId } from '@/core/types.ts';
+import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
 import { triggerDownload, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
 import { DownloadButton, FidelityBadge, LossList, SpeedBadge } from './fidelity-badge.tsx';
@@ -39,6 +39,18 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   const feasible = plans.filter((p) => p.feasible);
   const impossible = plans.filter((p) => !p.feasible);
   const active = entry.profile && entry.target ? planFor(entry.profile, entry.target) : null;
+
+  // Several targets usually fail for the same reason — an audio file cannot become a
+  // video, a GIF, or a Live Photo, and listing that sentence six times buries the one
+  // entry that says something different. Group by reason, name the targets once.
+  const impossibleGroups = useMemo(() => {
+    const byReason = new Map<string, FormatId[]>();
+    for (const p of impossible) {
+      const reason = p.impossibility!.reason;
+      byReason.set(reason, [...(byReason.get(reason) ?? []), p.target]);
+    }
+    return [...byReason.entries()] as Array<[ImpossibilityReason, FormatId[]]>;
+  }, [impossible]);
 
   const busy = entry.status === 'running' || entry.status === 'queued';
 
@@ -129,17 +141,16 @@ export function FileCard({ entry }: { entry: FileEntry }) {
 
               {showImpossible && (
                 <ul className="mt-2 space-y-1.5">
-                  {impossible.map((p) => {
-                    const copy = IMPOSSIBILITY_COPY[p.impossibility!.reason];
+                  {impossibleGroups.map(([reason, targets]) => {
+                    const copy = IMPOSSIBILITY_COPY[reason];
                     return (
-                      <li key={p.target} className="flex items-start gap-1.5 text-xs">
+                      <li key={reason} className="flex items-start gap-1.5 text-xs">
                         <Lock className="text-muted-foreground mt-0.5 size-3 shrink-0" />
-                        {/* The title is the headline; the body is the explanation. In a
-                            compact list the body carries the meaning, so the title
-                            becomes the tooltip rather than a second line of noise. */}
-                        <span className="text-muted-foreground" title={copy.title}>
-                          <span className="text-foreground">{FORMATS[p.target].label}：</span>
-                          {copy.body(p.impossibility!)}
+                        <span className="text-muted-foreground">
+                          <span className="text-foreground" title={copy.title}>
+                            {targets.map((t) => FORMATS[t].label).join('、')}：
+                          </span>
+                          {copy.body({ reason, alternatives: [] })}
                         </span>
                       </li>
                     );
