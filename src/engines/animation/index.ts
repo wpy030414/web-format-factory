@@ -64,9 +64,22 @@ const GIF_MAX_COLORS = 255; // the encoder reserves one index for transparency
  *
  * GIF encoding is inherently memory-hungry: the encoder accumulates one indexed byte per
  * pixel per frame, so thirty seconds of 1080p is hundreds of megabytes before any palette
- * work. Refusing clearly beats crashing the tab, and we say which limit was hit.
+ * work. Rather than refusing large jobs, the engine splits the timeline into independently
+ * encoded segments — each stays within a safe memory ceiling, and the segments are delivered
+ * as multiple files.
  */
 const MAX_FRAMES = 1200;
+
+/**
+ * Maximum pixel-seconds per GIF segment.
+ *
+ * pixel-seconds = width × height × frame_count. A segment is a self-contained GIF whose
+ * encoder holds at most this many bytes internally. When the source exceeds the budget the
+ * engine produces multiple segments that each fit comfortably in the worker's heap.
+ *
+ * 400M px·s ≈ 1080p@193 frames ≈ 720p@434 frames ≈ 4K@48 frames.
+ */
+const MAX_GIF_PIXEL_SECONDS = 400_000_000;
 
 const VIDEO_WRITERS: Partial<Record<FormatId, () => OutputFormat>> = {
   mp4: () => new Mp4OutputFormat(),
@@ -112,9 +125,13 @@ export class AnimationEngine implements Engine {
     const spec = getFormat(target);
 
     if (target === 'gif') {
-      const blob = await this.#toGif(request);
+      const blobs = await this.#toGif(request);
       return {
-        outputs: [{ blob, name: outputNameFor(request.inputName, spec.extension) }],
+        outputs: blobs.map((blob, i) => ({
+          blob,
+          name: outputNameFor(request.inputName, spec.extension,
+            blobs.length > 1 ? i : undefined),
+        })),
         engineId: this.id,
         did: 'transcode',
       };
@@ -129,7 +146,7 @@ export class AnimationEngine implements Engine {
   }
 
   /** Video → GIF, or animated GIF → GIF (a re-encode). */
-  async #toGif(request: EngineRequest): Promise<Blob> {
+  async #toGif(request: EngineRequest): Promise<Blob[]> {
     const { input, params, onProgress, signal } = request;
 
     const maxColors = clampMaxColors(params.paletteSize ?? GIF_MAX_COLORS);
@@ -143,7 +160,7 @@ export class AnimationEngine implements Engine {
         ? await animatedFrames(input)
         : await decodeImageAnimation(input);
 
-    if (frames) return encodeFrames(frames, maxColors, dither, onProgress, signal);
+    if (frames) return [await encodeFrames(frames, maxColors, dither, onProgress, signal)];
 
     return videoToGif(input, maxColors, dither, onProgress, signal);
   }
@@ -181,86 +198,111 @@ async function videoToGif(
   dither: DitherName,
   onProgress: EngineRequest['onProgress'],
   signal?: AbortSignal,
-): Promise<Blob> {
+): Promise<Blob[]> {
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) throw new EngineError('这个文件里没有视频轨道', 'unsupported');
+    if (!(await track.canDecode())) {
+      throw new EngineError('这个浏览器无法解码该视频轨道', 'decode-failed');
+    }
 
-  const track = await input.getPrimaryVideoTrack();
-  if (!track) throw new EngineError('这个文件里没有视频轨道', 'unsupported');
-  if (!(await track.canDecode())) {
-    throw new EngineError('这个浏览器无法解码该视频轨道', 'decode-failed');
+    // Where this track's own timeline starts — not zero. A file whose first frame arrives
+    // late would otherwise carry that lateness on its first frame, and `canvases(0)` yields
+    // nothing at all for such a file, which is how it used to fail with "no usable frames".
+    const originMs = Math.max(0, (await track.getFirstTimestamp()) * 1000);
+    const durationMs = await track
+      .computeDuration()
+      .then((seconds) => seconds * 1000)
+      .catch(() => Number.NaN);
+
+    // How this source is laid onto a GIF's timeline, decided from the track's real packet
+    // timestamps rather than from whatever the container claims. Both branches below are
+    // decided here, before a single frame is decoded.
+    const regime = decideRegime(
+      await track.computeFrameRateMetrics().then(
+        (metrics) => ({
+          average: metrics.averageFrameRate,
+          max: metrics.maxFrameRate,
+          constant: metrics.frameRateIsConstant,
+        }),
+        // The probe for the loss report asks the same question, and the two are deliberately
+        // independent: this one decides what gets written, that one decides what the user is
+        // told, and neither is entitled to the other's answer.
+        () => undefined,
+      ),
+    );
+
+    const sink = new CanvasSink(track);
+
+    let encoder: Encoder | undefined;
+    let scratch: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D } | undefined;
+    let count = 0;
+    const blobs: Blob[] = [];
+
+    // When a segment fills up, flush the current encoder into a blob and start fresh.
+    // This is how long videos stay within a safe memory ceiling: each segment produces
+    // an independent GIF, and they are delivered as multiple files.
+    //
+    // How many raw pixel bytes the source adds per frame, read once from the track.
+    const pixelCost = await computePixelCost(track);
+    let pixelUsed = 0;
+
+    // Frames go to the encoder one at a time rather than being collected first: holding a
+    // canvas it reaches for `document.createElement('canvas')` — which does not exist in a
+    // worker — so its CanvasImageSource path is main-thread only. Both the encoder and the
+    // scratch canvas wait for the first frame that is actually kept, because that frame is
+    // what sizes them.
+    const push = async (canvas: HTMLCanvasElement | OffscreenCanvas, delayMs: number) => {
+      if (signal?.aborted) throw new EngineError('已取消', 'aborted');
+      if (count >= MAX_FRAMES) throw tooManyFrames(count);
+
+      // Segment boundary: when the pixel budget runs out, flush this encoder and start a
+      // new one. The fresh encoder and scratch canvas are created via `??=` on next call.
+      if (encoder && pixelCost > 0 && pixelUsed + pixelCost > MAX_GIF_PIXEL_SECONDS) {
+        blobs.push(await encoder.flush('blob'));
+        encoder = undefined;
+        scratch = undefined;
+        count = 0;
+        pixelUsed = 0;
+      }
+
+      encoder ??= new Encoder({
+        width: canvas.width,
+        height: canvas.height,
+        maxColors,
+        ...(dither ? { dither } : {}),
+      });
+      scratch ??= scratchCanvas(canvas.width, canvas.height);
+      const { canvas: target, ctx } = scratch;
+
+      ctx.clearRect(0, 0, target.width, target.height);
+      ctx.drawImage(canvas, 0, 0);
+      const pixels = ctx.getImageData(0, 0, target.width, target.height).data;
+
+      await encoder.encode({ data: pixels, delay: clampDelay(delayMs) });
+      count += 1;
+      pixelUsed += pixelCost;
+      onProgress?.({ phase: 'encoding', ratio: undefined, frames: { done: count, total: 0 } });
+    };
+
+    if (regime === 'grid' && Number.isFinite(durationMs) && durationMs > originMs) {
+      await pushGrid(sink, planGrid(originMs, durationMs), push);
+    } else {
+      await pushCumulative(sink, originMs, durationMs, push);
+    }
+
+    if (!encoder) throw new EngineError('视频里没有可用的帧', 'decode-failed');
+    // Flush the last (or only) segment.
+    blobs.push(await encoder.flush('blob'));
+    return blobs;
+  } finally {
+    // Input.dispose() cascades: it closes the demuxer, source refs, and all decoders
+    // that the CanvasSink created. Without this, each video→GIF conversion leaks handles
+    // that survive until the next GC pass — and a batch of ten conversions can exhaust
+    // the heap before GC ever runs.
+    input.dispose();
   }
-
-  // Where this track's own timeline starts — not zero. A file whose first frame arrives
-  // late would otherwise carry that lateness on its first frame, and `canvases(0)` yields
-  // nothing at all for such a file, which is how it used to fail with "no usable frames".
-  const originMs = Math.max(0, (await track.getFirstTimestamp()) * 1000);
-  const durationMs = await track
-    .computeDuration()
-    .then((seconds) => seconds * 1000)
-    .catch(() => Number.NaN);
-
-  // How this source is laid onto a GIF's timeline, decided from the track's real packet
-  // timestamps rather than from whatever the container claims. Both branches below are
-  // decided here, before a single frame is decoded.
-  const regime = decideRegime(
-    await track.computeFrameRateMetrics().then(
-      (metrics) => ({
-        average: metrics.averageFrameRate,
-        max: metrics.maxFrameRate,
-        constant: metrics.frameRateIsConstant,
-      }),
-      // The probe for the loss report asks the same question, and the two are deliberately
-      // independent: this one decides what gets written, that one decides what the user is
-      // told, and neither is entitled to the other's answer.
-      () => undefined,
-    ),
-  );
-
-  const sink = new CanvasSink(track);
-
-  let encoder: Encoder | undefined;
-  let scratch: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D } | undefined;
-  let count = 0;
-
-  // Frames go to the encoder one at a time rather than being collected first: holding a
-  // few hundred RGBA canvases would cost gigabytes, where the encoder's own indexed
-  // representation is a quarter of that.
-  //
-  // The encoder is handed raw pixels rather than the source canvas on purpose: given a
-  // canvas it reaches for `document.createElement('canvas')` — which does not exist in a
-  // worker — so its CanvasImageSource path is main-thread only. Both the encoder and the
-  // scratch canvas wait for the first frame that is actually kept, because that frame is
-  // what sizes them.
-  const push = async (canvas: HTMLCanvasElement | OffscreenCanvas, delayMs: number) => {
-    if (signal?.aborted) throw new EngineError('已取消', 'aborted');
-    if (count >= MAX_FRAMES) throw tooManyFrames(count);
-
-    encoder ??= new Encoder({
-      width: canvas.width,
-      height: canvas.height,
-      maxColors,
-      ...(dither ? { dither } : {}),
-    });
-    scratch ??= scratchCanvas(canvas.width, canvas.height);
-    const { canvas: target, ctx } = scratch;
-
-    ctx.clearRect(0, 0, target.width, target.height);
-    ctx.drawImage(canvas, 0, 0);
-    const pixels = ctx.getImageData(0, 0, target.width, target.height).data;
-
-    await encoder.encode({ data: pixels, delay: clampDelay(delayMs) });
-    count += 1;
-    onProgress?.({ phase: 'encoding', ratio: undefined, frames: { done: count, total: 0 } });
-  };
-
-  if (regime === 'grid' && Number.isFinite(durationMs) && durationMs > originMs) {
-    await pushGrid(sink, planGrid(originMs, durationMs), push);
-  } else {
-    await pushCumulative(sink, originMs, durationMs, push);
-  }
-
-  if (!encoder) throw new EngineError('视频里没有可用的帧', 'decode-failed');
-  return encoder.flush('blob');
 }
 
 /** Whichever frame we hand the encoder next: the grid regime, or the cumulative one. */
@@ -608,6 +650,16 @@ function toImageData(frame: DecodedFrame): ImageData {
  */
 function asPixels(data: Uint8ClampedArray): Uint8ClampedArray<ArrayBuffer> {
   return data as Uint8ClampedArray<ArrayBuffer>;
+}
+
+async function computePixelCost(track: { getSquarePixelWidth?(): Promise<number>; getCodedWidth?(): Promise<number>; getSquarePixelHeight?(): Promise<number>; getCodedHeight?(): Promise<number> }): Promise<number> {
+  const w = await track.getSquarePixelWidth?.().catch(() => undefined)
+    ?? await track.getCodedWidth?.().catch(() => 0)
+    ?? 0;
+  const h = await track.getSquarePixelHeight?.().catch(() => undefined)
+    ?? await track.getCodedHeight?.().catch(() => 0)
+    ?? 0;
+  return w * h;
 }
 
 async function isGif(blob: Blob): Promise<boolean> {
