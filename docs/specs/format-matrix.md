@@ -24,7 +24,7 @@
 
 ## 格式清单
 
-**影像线**：JPEG、PNG、APNG、WebP、动态 WebP、GIF、MP4、MOV、MKV、WebM、Live Photo
+**影像线**：JPEG、PNG、APNG、WebP、动态 WebP、GIF、MP4、MOV、MKV、WebM、Live Photo、Motion Photo
 **音频线**：M4A、MP3、AAC、FLAC、WAV、OGG
 
 ### 关键容器特征
@@ -52,6 +52,13 @@ MP4 / MOV / M4A / HEIC **全是 ISO-BMFF**，只能靠 `ftyp` 的 major brand �
 `qt  ` = MOV、`M4A ` = M4A、`heic`/`mif1` = HEIC、`isom`/`mp42` = MP4。
 MKV 与 WebM 同为 EBML，靠 DocType 区分。**因此识别必须走魔数，不得信扩展名。**
 
+## 两层判定
+
+这张表回答的是**语义上是否可能**，逐台机器一致——因此它可以被穷举测试锁定。
+「这台机器是否做得到」是另一层，由 `src/core/routing/gates.ts` 在 `planFor()` 里叠加，
+理由见 `docs/specs/engine-routing.md`。两层分开是刻意的：混在一起，这张表就会随
+运行它的机器而变，穷举测试也就失去了意义。
+
 ## 约束
 
 - 转换类别必须由 `kindOf()` 从两轴推导，不得声明。
@@ -71,7 +78,10 @@ MKV 与 WebM 同为 EBML，靠 DocType 区分。**因此识别必须走魔数，
 - [ ] 每条 `impossible` 都带有非空 `reason`
 - [ ] 音频对视频/图像目标的判定为 `needs-visual-component` 或 `class-mismatch`
 - [ ] 静图对动图目标为 `needs-multiple-frames`，对 Live Photo 为 `livephoto-needs-video`
+- [ ] 动图对 Live Photo / Motion Photo 为 `project`，探针为 `repack-live`
 - [ ] Live Photo 对视频目标为 `split-video`，对静图目标为 `split-still`
+- [ ] 能力闸门不改变 `verdictFor()` 的判定：同一对格式在任何机器上的结论一致
+- [ ] 每条被闸门挡下的路由都带非空 `reason` 与非空 `detail`
 - [ ] 每个 `ParamSpec.id` 均位于 `SCOPE_ALLOWLIST` 内
 
 ## 完成定义

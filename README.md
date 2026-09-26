@@ -12,7 +12,7 @@
 
 覆盖格式：
 
-- **影像线**：GIF、WebP（含动态）、WebM、Live Photo、JPEG、PNG、MP4、MOV、MKV
+- **影像线**：GIF、APNG、WebP（含动态）、WebM、Live Photo、Motion Photo、JPEG、PNG、MP4、MOV、MKV
 - **音频线**：M4A、MP3、AAC、FLAC、WAV、OGG
 
 ## 为什么存在？
@@ -54,11 +54,13 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 主干引擎（Mediabunny）与「基于编码」的复制/转码判定
 - 图像线：JPEG / PNG / WebP 静图互转，含 EXIF 方向与透明通道处理；
   **HEIC 解码**——Safari 走原生快路径，其余浏览器按需取回约 3 MB 的 WASM 解码器
-- 动图线：视频 ↔ GIF 双向，含调色板与抖动；动态 WebP 与 APNG 的取帧走浏览器自带的
-  `ImageDecoder`，这条路上不必惊动兜底引擎
+- 动图线：**动图 ↔ 视频的整张矩阵**——GIF / 动态 WebP / APNG 与 MP4 / MOV / MKV / WebM
+  之间十五条方向全部可达，且全部有端到端验收（产物交给 ffprobe 与字节本身核对，不看扩展名）；
+  视频 → GIF 含调色板与抖动。动态 WebP 与 APNG 的取帧走浏览器自带的 `ImageDecoder`，
+  这条路上不必惊动兜底引擎
 - 音频线：M4A / MP3 / AAC / FLAC / WAV / OGG 互转；浏览器没有的 MP3、FLAC、AAC
   编码器按需取回 WASM 扩展
-- Live Photo：四种形态的识别与拆包、**从视频组装**（写入 Apple 配对标识）、
+- Live Photo：四种形态的识别与拆包、**从视频或动图组装**（写入 Apple 配对标识）、
   **多文件拖入的自动配对**、**手动配对与解除配对**（三种配对来源分别如实标注）；
   导出静图时会剥掉已经失效的 Motion Photo 声明
 - Motion Photo（Google 的单文件形态）：由视频或已有 Live Photo 组装成一张尾部拼着 MP4 的 JPEG。
@@ -71,7 +73,7 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 诊断页 `#/capabilities`：实测本机的跨源隔离、编解码器可用性、原生 HEIC 支持，
   并翻译成「这对应用意味着什么」
 - 部署配置样例（`deploy/`）与一份无依赖的参考服务器（`scripts/serve-deploy.mjs`）
-- 测试：单元与集成 183 项；Playwright 端到端 48 项跑 dev server，另有 6 项跑**构建产物**
+- 测试：单元与集成 212 项；Playwright 端到端 62 项跑 dev server，另有 6 项跑**构建产物**
   （`pnpm test:e2e:prod`）。产物一律交给 ffprobe 校验
 
 ![能力诊断页](docs/screenshot-capabilities.png)
@@ -79,8 +81,11 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 已知限制：
 
 - 分辨率缩放、帧率调整、裁剪、截取片段**不在范围内**（见 `docs/PRD.md` 的语义边界）。
-- 跨编码的转换（如 MP4 → WebM）依赖浏览器的 WebCodecs 硬件编码器，可用性因平台而异，
-  界面尚不会主动提示降级。
+- 跨编码的转换（如 MP4 → WebM）依赖浏览器的 WebCodecs 编解码器，可用性因平台而异。
+  路由会按**实测**结果禁用这台机器做不到的路由，并说明是哪一扇门：源轨道解不开、
+  用户点名要的编码本机编不出来、动态 WebP / APNG 取不了帧、兜底引擎缺跨源隔离。
+  **例外**是引擎自己挑编码的情形（用户没点名）——它照容器的编码表取第一个编得出来的，
+  若一个都没有，仍会在点击之后才失败。见 `docs/specs/engine-routing.md`。
 - **组装 Live Photo 必须下载约 31 MB 的兜底引擎**，且页面须开启跨源隔离（COOP/COEP），
   因为 Apple 的配对标识只能由 ffmpeg 写入——这是实测结论，详见 `docs/DECISIONS.md` ADR-004。
   缺少响应头时界面会明确说明，而不是让转换一直停在那里。
