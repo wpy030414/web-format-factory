@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -663,6 +663,116 @@ test.describe('Live Photo', () => {
     // unusable, would be worse than leaving them apart.
     const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
     expect(ffprobe(saved).codecs).toContain('mjpeg');
+  });
+});
+
+/**
+ * Everything from a JPEG's SOS marker onward is the entropy-coded picture itself.
+ *
+ * A re-encode rewrites all of it; carrying the file across byte-for-byte changes none of
+ * it. That difference is invisible in the file's size, its headers, or whether it opens —
+ * which is exactly why it is worth asserting directly.
+ */
+function jpegScanData(bytes: Buffer): Buffer {
+  const at = bytes.indexOf(Buffer.from([0xff, 0xda]), 2);
+  expect(at, '产物里没有找到 SOS 标记').toBeGreaterThan(-1);
+  return bytes.subarray(at);
+}
+
+test.describe('Motion Photo — Google 的单文件形态', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('视频 → Motion Photo：一张尾部拼着 MP4 的 JPEG，且偏移确实落在 ftyp 上', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    expect(await waitForClass(page)).toBe('视频');
+
+    const saved = await convertAndSave(page, 'Motion Photo', 'out.jpg');
+    const bytes = readFileSync(saved);
+
+    // A JPEG at the front, and the XMP that tells a reader where the video starts.
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xff, 0xd8, 0xff]);
+    const text = bytes.toString('latin1');
+    expect(text).toContain('Camera:MotionPhoto="1"');
+
+    // The load-bearing property, re-derived here rather than asked of our own library:
+    // the offset counts back from the end of the file, so the position it names must be
+    // the start of a video container. Read the other way round it still produces a file
+    // that opens — whose "video" is a slice of JPEG.
+    const offset = Number(/Camera:MicroVideoOffset="(\d+)"/.exec(text)?.[1]);
+    expect(offset).toBeGreaterThan(0);
+
+    const videoStart = bytes.length - offset;
+    expect(bytes.subarray(videoStart + 4, videoStart + 8).toString('latin1')).toBe('ftyp');
+
+    // And it is a real MP4, not just four plausible bytes.
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const tail = join(dir, 'tail.mp4');
+    writeFileSync(tail, bytes.subarray(videoStart));
+    expect(ffprobe(tail).formatName).toContain('mp4');
+  });
+
+  test('Live Photo → Motion Photo：静图原样搬运，一个字节都没有重新编码', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'pair.livp');
+    expect(await waitForClass(page)).toBe('Live Photo');
+
+    const saved = await convertAndSave(page, 'Motion Photo', 'out.jpg');
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    execFileSync('unzip', ['-o', '-q', join(FIXTURES, 'pair.livp'), 'live.jpg', '-d', dir]);
+
+    // The still inside the .livp is already a JPEG, which is exactly what this packaging
+    // wants. Re-encoding it would be a generation loss bought for nothing — so the
+    // picture data must come out identical.
+    //
+    // Compared as a prefix rather than whole: past the end of the picture, the produced
+    // file continues into the appended video, which is the point of the format. Had the
+    // still been re-encoded, the difference would show up in the first few hundred bytes.
+    const original = jpegScanData(readFileSync(join(dir, 'live.jpg')));
+    const produced = jpegScanData(readFileSync(saved));
+
+    expect(produced.subarray(0, original.length)).toEqual(original);
+    expect(produced.length).toBeGreaterThan(original.length);
+  });
+
+  test('Motion Photo → Live Photo：把单文件形态换成 Apple 的成对形态', async ({ page }) => {
+    // This route was advertised from the beginning and failed on every attempt: a Motion
+    // Photo is a `live-photo` to the router, and repacking it as Apple's flavour needs a
+    // still and a MOV — neither of which the old path could find inside a JPEG.
+    test.setTimeout(300_000);
+
+    await page.goto('/');
+    await dropFile(page, 'motionphoto.jpg');
+    expect(await waitForClass(page)).toBe('Live Photo');
+
+    const saved = await convertAndSave(page, 'Live Photo', 'out.livp');
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const listing = execFileSync('unzip', ['-l', saved], { encoding: 'utf8' });
+    expect(listing).toMatch(/\.jpg/);
+    expect(listing).toMatch(/\.mov/);
+
+    execFileSync('unzip', ['-o', '-q', saved, '-d', dir]);
+
+    const movName = execFileSync('bash', ['-c', `cd ${dir} && ls *.mov`], { encoding: 'utf8' }).trim();
+    const tags = execFileSync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', join(dir, movName)],
+      { encoding: 'utf8' },
+    );
+    // Without this the two halves are not a pair and no Apple device would take it.
+    expect(tags).toContain('com.apple.quicktime.content.identifier');
+
+    // And the still must no longer claim to contain a video of its own. That claim was
+    // true in the file it came from; in this bundle the video is a separate file, so
+    // carrying it across would leave the still telling every reader a lie.
+    const stillName = execFileSync('bash', ['-c', `cd ${dir} && ls *.jpg`], { encoding: 'utf8' }).trim();
+    const still = readFileSync(join(dir, stillName)).toString('latin1');
+    expect(still).not.toContain('MotionPhoto="1"');
   });
 });
 

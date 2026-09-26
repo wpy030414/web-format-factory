@@ -279,11 +279,16 @@ const LIVE_PARAMS: readonly ParamSpec[] = [
   {
     id: 'quality',
     label: '静帧质量',
+    // Stated because it is genuinely conditional: a still carried across byte-for-byte is
+    // never recompressed, and a control whose effect depends on the route owes the user
+    // that much.
+    help: '只在你提供的静帧需要重新编码时生效——从视频取第一帧，或 Live Photo 的静图是 HEIC。原样搬运的静图不会被重新压缩。',
     control: 'range',
     min: 0,
     max: 100,
     step: 1,
-    default: 85,
+    // Deliberately high: this still is the half a viewer looks at and holds on to.
+    default: 92,
   },
 ];
 
@@ -652,6 +657,35 @@ const livePhoto: FormatSpec = {
   note: 'A pair, not a single file: a still image plus a short video sharing an identifier.',
 };
 
+/**
+ * Google's flavour of the same idea: one file instead of two.
+ *
+ * A separate target rather than a parameter of the Live Photo one, because almost
+ * everything visible about the result differs — a `.jpg` rather than a `.livp`, a single
+ * file rather than an archive, and no fallback engine needed at all. Folding that into a
+ * dropdown on the Live Photo format would make the picker look like one choice while
+ * producing two very different things.
+ */
+const motionPhoto: FormatSpec = {
+  id: 'motion-photo',
+  label: 'Motion Photo',
+  extension: 'jpg',
+  mime: 'image/jpeg',
+  family: 'live',
+  acceptsClasses: ['video', 'live-photo'],
+  containers: ['jpeg'],
+  codecs: {},
+  traits: {
+    animation: 'required',
+    alpha: 'none',
+    multitrack: false,
+    losslessMode: false,
+    metadata: true,
+  },
+  params: LIVE_PARAMS,
+  note: 'Google 的单文件形态：一张 JPEG，尾部拼着一段 MP4。不需要兜底引擎。',
+};
+
 export const FORMATS: Record<FormatId, FormatSpec> = {
   jpeg,
   png,
@@ -664,6 +698,7 @@ export const FORMATS: Record<FormatId, FormatSpec> = {
   mkv,
   webm,
   'live-photo': livePhoto,
+  'motion-photo': motionPhoto,
   m4a,
   mp3,
   aac,

@@ -68,6 +68,7 @@ export type FormatId =
   | 'mkv'
   | 'webm'
   | 'live-photo'
+  | 'motion-photo'
   | 'm4a'
   | 'mp3'
   | 'aac'

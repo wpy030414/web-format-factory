@@ -39,6 +39,7 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     png: { kind: 'project', projector: 'keyframe' },
     webp: { kind: 'project', projector: 'keyframe' },
     'live-photo': { kind: 'project', projector: 'repack-live' },
+    'motion-photo': { kind: 'project', projector: 'repack-live' },
   },
 
   /* ---- animated image -------------------------------------------------- */
@@ -47,6 +48,7 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     webp: { kind: 'project', projector: 'keyframe' },
     png: { kind: 'project', projector: 'keyframe' },
     'live-photo': { kind: 'impossible', reason: 'needs-motion-component' },
+    'motion-photo': { kind: 'impossible', reason: 'needs-motion-component' },
   },
 
   /* ---- still image ----------------------------------------------------- */
@@ -59,6 +61,7 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     mkv: { kind: 'impossible', reason: 'needs-motion-component' },
     webm: { kind: 'impossible', reason: 'needs-motion-component' },
     'live-photo': { kind: 'impossible', reason: 'livephoto-needs-video' },
+    'motion-photo': { kind: 'impossible', reason: 'livephoto-needs-video' },
   },
 
   /* ---- audio ----------------------------------------------------------- */
@@ -74,6 +77,7 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     png: { kind: 'impossible', reason: 'class-mismatch' },
     webp: { kind: 'impossible', reason: 'class-mismatch' },
     'live-photo': { kind: 'impossible', reason: 'class-mismatch' },
+    'motion-photo': { kind: 'impossible', reason: 'class-mismatch' },
   },
 
   /* ---- live photo ------------------------------------------------------ */
@@ -89,6 +93,7 @@ const TRANSITIONS: Partial<Record<MediaClass, Partial<Record<FormatId, Verdict>>
     png: { kind: 'project', projector: 'split-still' },
     webp: { kind: 'project', projector: 'split-still' },
     'live-photo': { kind: 'project', projector: 'repack-live' },
+    'motion-photo': { kind: 'project', projector: 'repack-live' },
   },
 };
 

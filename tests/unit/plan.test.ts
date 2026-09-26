@@ -130,6 +130,45 @@ describe('planFor — 不可能转换', () => {
   });
 });
 
+describe('planFor — 两种 Live Photo 形态', () => {
+  it('视频对两种形态都可行，且都如实标为投影', () => {
+    const profile = profileWith('video', { video: ['avc'], audio: ['aac'] });
+
+    for (const target of ['live-photo', 'motion-photo'] as FormatId[]) {
+      const plan = planFor(profile, target);
+      expect(plan.feasible, target).toBe(true);
+      // A bundle is not what went in, whatever else is true of it.
+      expect(plan.fidelity, target).toBe('projection');
+    }
+  });
+
+  it('Live Photo 转 Motion Photo 可行——把一个包换成另一种形状', () => {
+    const plan = planFor(profileWith('live-photo', { container: 'zip' }), 'motion-photo');
+    expect(plan.feasible).toBe(true);
+    expect(plan.fidelity).toBe('projection');
+  });
+
+  it('静图对两种形态都不可行，理由是缺视频那一半', () => {
+    // The same refusal for both flavours, because the reason is the same: inventing the
+    // motion half would be creation, not conversion.
+    const profile = profileWith('still-image', { container: 'jpeg' });
+
+    for (const target of ['live-photo', 'motion-photo'] as FormatId[]) {
+      const plan = planFor(profile, target);
+      expect(plan.feasible, target).toBe(false);
+      expect(plan.impossibility?.reason, target).toBe('livephoto-needs-video');
+    }
+  });
+
+  it('默认目标不会挑中这两种形态', () => {
+    // Deliberate destinations, not somewhere to be steered: a video's default should be
+    // the plain container change.
+    const profile = profileWith('video', { video: ['avc'], audio: ['aac'] });
+    expect(pickDefaultTarget(profile)).not.toBe('motion-photo');
+    expect(pickDefaultTarget(profile)).not.toBe('live-photo');
+  });
+});
+
 describe('pickDefaultTarget — 默认动作应当是免费的那个', () => {
   it('视频默认选换容器的目标，而不是需要转码的', () => {
     // WebM is a plausible-looking default but forces H.264 → VP9: slow and lossy.

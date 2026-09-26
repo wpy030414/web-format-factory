@@ -44,8 +44,8 @@ export const IMPOSSIBILITY_COPY: Record<ImpossibilityReason, ImpossibilityCopy> 
   'needs-motion-component': {
     title: '静态图没有运动',
     body: () =>
-      'Live Photo 的定义是「一张静图 + 一段短片」。单张图片无法提供视频的那一半。' +
-      '把配对的那段视频一起拖进来，我们就可以把它们组回一个 Live Photo。',
+      'Live Photo 与 Motion Photo 的定义都是「一张静图 + 一段短片」。单张图片无法提供' +
+      '视频的那一半。把配对的那段视频一起拖进来，我们就可以把它们组回去。',
   },
 
   'needs-multiple-frames': {
@@ -56,9 +56,10 @@ export const IMPOSSIBILITY_COPY: Record<ImpossibilityReason, ImpossibilityCopy> 
   },
 
   'livephoto-needs-video': {
-    title: 'Live Photo 还需要一段视频',
+    title: '还需要一段视频',
     body: () =>
-      'Live Photo 由一张静图和一段共享标识的短片配对而成。只有静图时，没有视频的那一半可以配对。',
+      'Live Photo 与 Motion Photo 都由一张静图和一段短片配对而成。只有静图时，' +
+      '没有视频的那一半可以配对。',
   },
 
   'no-encoder-in-browser': {
