@@ -47,6 +47,23 @@ function ffprobe(file: string): { formatName: string; codecs: string[] } {
   };
 }
 
+/** `width,height` of the first video stream, straight from ffprobe. */
+function ffprobeSize(file: string): { width: number; height: number } {
+  const out = execFileSync(
+    'ffprobe',
+    [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height',
+      '-of', 'csv=p=0',
+      file,
+    ],
+    { encoding: 'utf8' },
+  ).trim();
+  const [width, height] = out.split(',').map(Number);
+  return { width: width ?? 0, height: height ?? 0 };
+}
+
 /** Drop several fixtures at once, optionally renaming them. */
 async function dropFiles(
   page: Page,
@@ -72,7 +89,6 @@ async function dropFile(page: Page, fixture: string, asName?: string): Promise<v
 
 /** The detected-class badge on the first file card. */
 const classBadge = (page: Page): Locator => page.getByTestId('media-class').first();
-
 /** Wait for probing to finish and return the detected class label. */
 async function waitForClass(page: Page): Promise<string> {
   await expect(classBadge(page)).toBeVisible({ timeout: 30_000 });
@@ -344,8 +360,94 @@ test.describe('图像转换', () => {
   });
 });
 
+test.describe('HEIC — 只有 Safari 能原生解码的那一类', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('HEIC → JPEG：浏览器不会解码时，用内置解码器解出真正的像素', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'still.heic');
+
+    // HEIC is what every recent iPhone writes, and outside Safari nothing can read it.
+    // Before this it came back `unknown` and the card offered no targets at all — the
+    // most common photograph in the world, and nothing to do with it.
+    expect(await waitForClass(page)).toBe('静态图像');
+
+    const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
+
+    expect(ffprobe(saved).codecs).toContain('mjpeg');
+    // The dimensions are what proves the pixels were really decoded: a decoder that
+    // silently handed back nothing would still produce a file, just an empty one.
+    expect(ffprobeSize(saved)).toEqual({ width: 64, height: 64 });
+  });
+
+  test('HEIC → PNG：同样走内置解码器，得到无损产物', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'still.heic');
+    await waitForClass(page);
+
+    const saved = await convertAndSave(page, 'PNG', 'out.png');
+
+    expect(ffprobe(saved).codecs).toContain('png');
+    expect(ffprobeSize(saved)).toEqual({ width: 64, height: 64 });
+  });
+});
+
+test.describe('音频编码器扩展', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('WAV → MP3：浏览器没有 MP3 编码器时，自动取回 WASM 编码器', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'tone.wav');
+    expect(await waitForClass(page)).toBe('音频');
+
+    const saved = await convertAndSave(page, 'MP3', 'out.mp3');
+
+    // `mp3` in an `mp3` container: the codec name is the whole point. Handing back a WAV
+    // with a .mp3 name would satisfy a weaker test and none of the user's intent.
+    const probed = ffprobe(saved);
+    expect(probed.codecs).toContain('mp3');
+    expect(probed.formatName).toContain('mp3');
+  });
+
+  test('WAV → FLAC：同样取回 WASM 编码器，产物是真正的 FLAC', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'tone.wav');
+    await waitForClass(page);
+
+    const saved = await convertAndSave(page, 'FLAC', 'out.flac');
+
+    const probed = ffprobe(saved);
+    expect(probed.codecs).toContain('flac');
+    expect(probed.formatName).toContain('flac');
+  });
+});
+
 test.describe('动图转换', () => {
   test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('动态 WebP → GIF：走浏览器自带的取帧 API，不惊动兜底引擎', async ({ page }) => {
+    // The reason this test watches the network rather than only the artifact: both paths
+    // produce a correct GIF, so an artifact check alone cannot tell them apart. The whole
+    // point of decoding through ImageDecoder is that it does *not* cost a 31 MB download,
+    // and that is a claim worth pinning down.
+    //
+    // Matched on the core's own filename rather than on "ffmpeg": the worker statically
+    // imports the fallback engine's *module*, so every conversion that ever ran requests
+    // /src/engines/ffmpeg/index.ts in dev, and matching that would flag all of them.
+    const fallbackCoreFetches: string[] = [];
+    page.on('request', (request) => {
+      if (/\/engines\/.*ffmpeg-core/.test(request.url())) fallbackCoreFetches.push(request.url());
+    });
+
+    await page.goto('/');
+    await dropFile(page, 'anim.webp');
+    expect(await waitForClass(page)).toBe('动图');
+
+    const saved = await convertAndSave(page, 'GIF', 'out.gif');
+
+    expect(ffprobe(saved).formatName).toContain('gif');
+    expect(fallbackCoreFetches).toEqual([]);
+  });
 
   test('视频 → GIF：产物是一个真正的 GIF', async ({ page }) => {
     await page.goto('/');
@@ -590,6 +692,65 @@ test.describe('兜底引擎', () => {
 
     // `webp_anim`, not `webp`: a still image would mean the animation was dropped.
     expect(ffprobe(saved).codecs).toContain('webp_anim');
+  });
+
+  test('动态 PNG：这条路由此前承诺了却没人做，现在由兜底引擎兑现', async ({ page }) => {
+    // Animated PNG was offered by the router from the beginning and no engine could
+    // produce it, so picking it failed at the very end of the job. This asserts the
+    // artifact rather than the absence of an error, because the absence of an error was
+    // never the problem.
+    await page.goto('/');
+    await dropFile(page, 'av.webm');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Animated PNG', exact: true }).click();
+    await page.getByRole('button', { name: /开始转换/ }).click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
+    await expect(downloadButton).toHaveText(/\.png$/);
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.png');
+    await download.saveAs(saved);
+
+    // `apng`, not `png`: the still-image muxer would write the first frame and call it
+    // an animation, and ffprobe names the difference.
+    expect(ffprobe(saved).codecs).toContain('apng');
+  });
+
+  test('Ogg + Vorbis：参数面板一直写着需要兜底引擎，这条测试要求它兑现', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'tone.wav');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Ogg', exact: true }).click();
+    // Vorbis is the whole point of this test — the default, Opus, has a native encoder
+    // and would never reach the fallback engine at all.
+    await page.getByTestId('param-codec').selectOption('vorbis');
+    await page.getByRole('button', { name: /开始转换/ }).click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
+    await expect(downloadButton).toHaveText(/\.ogg$/);
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.ogg');
+    await download.saveAs(saved);
+
+    const probed = ffprobe(saved);
+    expect(probed.formatName).toContain('ogg');
+    expect(probed.codecs).toContain('vorbis');
   });
 
   test('组装 Live Photo：把视频做成一个带配对标识的 .livp', async ({ page }) => {
