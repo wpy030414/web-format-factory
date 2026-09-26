@@ -578,11 +578,20 @@ export const useStore = create<State>((set, get) => {
     },
 
     downloadAll() {
-      // Archived rather than saved file-by-file: a folder picker per result would be a
-      // stack of dialogs, and two bare downloads per result is the thing browsers throttle.
-      for (const f of get().files) {
-        if (f.status === 'done' && f.result) void saveFiles(resultFiles(f.result), { folder: false });
-      }
+      // One call for the whole batch — never one per result.
+      //
+      // Every browser allows the first `<a download>` from a gesture and throttles the
+      // rest, silently, with the page unable to tell that it happened. Saving ten results
+      // in a loop is therefore indistinguishable from saving one: the user gets the first
+      // file and no hint about the other nine. They go into a single folder or a single
+      // archive instead, which is also why the names are de-duplicated — a container holds
+      // one file per name, and two jobs can easily produce the same one.
+      const files = get()
+        .files.filter((f) => f.status === 'done' && f.result)
+        .flatMap((f) => resultFiles(f.result!));
+      if (files.length === 0) return;
+
+      void saveFiles(files, { archiveName: 'Web Format Factory.zip' });
     },
   };
 });

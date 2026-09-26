@@ -43,15 +43,51 @@ export function zipNameFor(files: readonly SaveableFile[]): string {
 }
 
 /**
+ * Give every file a name no other file in the same container already has.
+ *
+ * Only matters when results from different jobs are merged into one archive or one folder,
+ * which is the whole point of a batch save: two sources can easily produce the same output
+ * name, and a container keyed by name would keep one of them and drop the other without a
+ * word. Saving them one at a time never had this problem — the browser de-duplicated — so
+ * merging has to take the job over.
+ */
+export function disambiguate(files: readonly SaveableFile[]): SaveableFile[] {
+  const used = new Set<string>();
+
+  return files.map((file) => {
+    if (!used.has(file.name)) {
+      used.add(file.name);
+      return file;
+    }
+
+    const dot = file.name.lastIndexOf('.');
+    const stem = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const extension = dot > 0 ? file.name.slice(dot) : '';
+    let n = 2;
+    let candidate = `${stem} (${n})${extension}`;
+    while (used.has(candidate)) candidate = `${stem} (${++n})${extension}`;
+    used.add(candidate);
+    return { ...file, name: candidate };
+  });
+}
+
+/**
  * Save one or more files, in a way that actually lands.
  *
  * A single file is an ordinary download — none of the above applies.
+ *
+ * Many files at once must be ONE call. Saving them in a loop is indistinguishable from
+ * saving only the first: every browser allows the first `<a download>` from a gesture and
+ * throttles the rest, and the page cannot detect that it happened.
  */
 export async function saveFiles(
   files: readonly SaveableFile[],
-  /** `folder: false` forces the archive — for callers saving many results at once, where
-   * a folder picker per result would be a stack of dialogs. */
-  options: { folder?: boolean } = {},
+  options: {
+    /** `folder: false` forces the archive, for callers that must not show a picker. */
+    folder?: boolean;
+    /** Name for the archive, when one is produced. Defaults to the first file's stem. */
+    archiveName?: string;
+  } = {},
 ): Promise<SaveOutcome> {
   const first = files[0];
   if (!first) return 'failed';
@@ -60,13 +96,15 @@ export async function saveFiles(
     return 'saved';
   }
 
+  const unique = disambiguate(files);
+
   if (options.folder !== false && canSaveToFolder()) {
     try {
       const picker = (window as unknown as {
         showDirectoryPicker(options: { mode: string }): Promise<DirectoryHandleLike>;
       }).showDirectoryPicker;
       const directory = await picker.call(window, { mode: 'readwrite' });
-      for (const file of files) {
+      for (const file of unique) {
         const handle = await directory.getFileHandle(file.name, { create: true });
         const writable = await handle.createWritable();
         await writable.write(file.blob);
@@ -81,12 +119,15 @@ export async function saveFiles(
   }
 
   const entries: Record<string, Uint8Array> = {};
-  for (const file of files) {
+  for (const file of unique) {
     entries[file.name] = new Uint8Array(await file.blob.arrayBuffer());
   }
   // Level 0: both halves are already-compressed media, so deflating them buys nothing and
   // costs a pass over a file that can be 30 MB.
   const zip = zipSync(entries, { level: 0 });
-  triggerDownload(new Blob([zip as BlobPart], { type: 'application/zip' }), zipNameFor(files));
+  triggerDownload(
+    new Blob([zip as BlobPart], { type: 'application/zip' }),
+    options.archiveName ?? zipNameFor(unique),
+  );
   return 'zipped';
 }

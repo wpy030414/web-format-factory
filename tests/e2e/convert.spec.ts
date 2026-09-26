@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import type { Locator, Page } from '@playwright/test';
+import type { Download, Locator, Page } from '@playwright/test';
 
 /**
  * End-to-end acceptance.
@@ -218,6 +218,54 @@ test.describe('页面与语义边界', () => {
     const after = await zone().boundingBox();
     expect(Math.round(after!.width)).toBe(Math.round(before!.width));
     expect(Math.round(after!.height)).toBe(Math.round(before!.height));
+  });
+});
+
+test.describe('全部下载', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('一次手势把所有结果装进一个归档，而不是逐个点下载', async ({ page }) => {
+    // Browsers allow the first `<a download>` from a gesture and throttle the rest without
+    // saying so — so a loop that saves each result separately delivers the first file and
+    // loses the others silently. This browser does NOT throttle, which is exactly why the
+    // bug reached the user: the loop looked fine here and dropped nine files in Chrome.
+    // Counting the downloads is therefore the only thing that catches it.
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'av.mp4', as: 'one.mp4' },
+      { fixture: 'av.mov', as: 'two.mov' },
+    ]);
+    await expect(page.locator('[data-testid="media-class"]')).toHaveCount(2, { timeout: 30_000 });
+
+    // Each card keeps its own preselected target, which is what makes this the plain
+    // two-results case: two jobs, two answers, one click.
+    await page.getByRole('button', { name: /开始转换/ }).click();
+    await expect(page.getByTestId('download-result')).toHaveCount(2, { timeout: 120_000 });
+
+    const downloads: Download[] = [];
+    page.on('download', (d) => downloads.push(d));
+
+    await page.getByRole('button', { name: /全部下载/ }).click();
+    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBeGreaterThan(0);
+    // The archive is assembled asynchronously; a second download would land right behind it.
+    await page.waitForTimeout(1500);
+    expect(downloads).toHaveLength(1);
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const archive = join(dir, 'all.zip');
+    // The `toHaveLength(1)` above is the proof that there is one; TypeScript cannot see it.
+    await downloads[0]!.saveAs(archive);
+
+    // Unpacked by a tool that shares no code with ours: the click has to have delivered
+    // both results, not one result and a promise.
+    execFileSync('unzip', ['-o', '-q', archive, '-d', dir]);
+    const names = readdirSync(dir).filter((n) => n !== 'all.zip');
+    expect(names, `归档里只有 ${names.join(', ')}`).toHaveLength(2);
   });
 });
 
