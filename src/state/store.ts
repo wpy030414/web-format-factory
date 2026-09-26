@@ -225,8 +225,8 @@ interface State {
   pickDrainFolder: () => Promise<void>;
   /** Stop writing to the folder and leave future results in memory. */
   clearDrainFolder: () => void;
-  /** Explicitly enable IndexedDB drain mode (for browsers without FSAA). */
-  enableIdbDrain: () => void;
+  /** Switch to IndexedDB drain mode. Async: it opens the per-session database first. */
+  enableIdbDrain: () => Promise<void>;
   /** Download a single drained (FSAA or IDB) result. */
   downloadDrained: (id: string) => Promise<void>;
 }

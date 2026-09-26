@@ -311,6 +311,68 @@ test.describe('全部下载', () => {
   });
 });
 
+test.describe('工具栏计数', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('转换中数的是没处理完的任务，不是并发槽位数', async ({ page }) => {
+    // The store's `running` is the concurrency counter: it saturates at two and then
+    // never moves, so a batch used to read 转换中（2） for its entire run — a frozen
+    // number pretending to be progress. Tiny transmuxes can outrun the first poll, so
+    // the batch is three GIF encodes — each one takes seconds, two fill the slots, one
+    // waits queued, and 转换中（3） holds still long enough to be read. The concurrency
+    // counter can never show 3, so this assertion cannot pass by accident.
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'av.webm', as: 'one.webm' },
+      { fixture: 'av.webm', as: 'two.webm' },
+      { fixture: 'av.webm', as: 'three.webm' },
+    ]);
+    await expect(page.getByTestId('media-class')).toHaveCount(3, { timeout: 30_000 });
+
+    // Each card keeps its own target picker; GIF is offered on all three.
+    const gifButtons = page.getByRole('button', { name: 'GIF', exact: true });
+    await expect(gifButtons).toHaveCount(3);
+    for (let i = 0; i < 3; i++) await gifButtons.nth(i).click();
+
+    await page.getByRole('button', { name: /开始转换（3）/ }).click();
+    await expect(page.getByRole('button', { name: /转换中（3）/ })).toBeVisible();
+
+    // And when the work is gone, the count is the finished tasks, ready to download.
+    await expect(page.getByRole('button', { name: /全部下载（3）/ })).toBeEnabled({
+      timeout: 120_000,
+    });
+  });
+
+  test('FSAA 不可用时暂存自动生效，全部下载读的仍是已完成数', async ({ page }) => {
+    // Staging is a fallback, not an option: a fallback the user must notice and switch on
+    // is a trap for whoever missed the button, so with FSAA missing it comes on by
+    // itself. That also means drained results hold no blob in memory — the old readout
+    // counted blobs, read 0, and disabled a button whose job it was to read them back.
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    // No opt-in button exists to skip: staging is already on.
+    await expect(page.getByRole('button', { name: '启用本地暂存' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: /开始转换/ }).click();
+    await expect(page.getByTestId('download-result')).toHaveCount(1, { timeout: 120_000 });
+
+    const downloadAll = page.getByRole('button', { name: /全部下载/ });
+    // Drained, yet counted — the readout is finished tasks, not blobs in memory.
+    await expect(downloadAll).toHaveText('全部下载（1）');
+    await expect(downloadAll).toBeEnabled();
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
+    await downloadAll.click();
+    await downloadPromise;
+  });
+});
+
 test.describe('识别与目标选择', () => {
   test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
 

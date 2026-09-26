@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Play, Download, Trash2, Loader2, FolderOpen, FolderX, Database } from 'lucide-react';
+import { Play, Download, Trash2, Loader2, FolderOpen, FolderX } from 'lucide-react';
 import { isActionable, isAwaitingAck, isBlocked, useStore } from '@/state/store.ts';
 import { canSaveToFolder } from '@/lib/save.ts';
 import { BatchCard } from '@/ui/batch-card.tsx';
@@ -65,16 +65,27 @@ function Converter() {
   const clearDrainFolder = useStore((s) => s.clearDrainFolder);
   const enableIdbDrain = useStore((s) => s.enableIdbDrain);
 
+  // When FSAA is missing, IDB drain is where results go to keep memory flat — and a
+  // fallback the user must opt into is not a fallback, it is a trap for whoever skipped
+  // the button. So it switches itself on with the first file. Gated on a file (not the
+  // page load) so an empty session still opens nothing; if IndexedDB refuses to open
+  // (private browsing), it stays in 'none' — blobs in memory beat a promise to drain
+  // that cannot be kept.
+  useEffect(() => {
+    if (canSaveToFolder() || files.length === 0 || drainMode !== 'none') return;
+    enableIdbDrain().catch(() => {});
+  }, [files.length, drainMode, enableIdbDrain]);
+
   // The counts come from the store's own predicates — the very ones `startAll` queues
   // with — so the button can never promise work the loop then skips. A count that
   // overstates is a silent no-op, which is worse than a disabled button.
   const readyCount = files.filter((f) => isActionable(f, caps, batch)).length;
   const doneCount = files.filter((f) => f.status === 'done').length;
-  // Folder mode: files land directly on disk, nothing to download.
-  const hasDownloadable =
-    drainMode === 'folder'
-      ? 0
-      : files.filter((f) => f.status === 'done' && f.result?.blob).length;
+  // While a batch is in flight, the store's `running` is the concurrency counter — it
+  // saturates at MAX_CONCURRENT and then never moves, which reads as a frozen number.
+  // What the user is watching for is how much of the batch is left, so count the work,
+  // not the workers: queued + running is exactly the set that has not finished yet.
+  const pendingCount = files.filter((f) => f.status === 'queued' || f.status === 'running').length;
   // Kept separate so the UI can explain the wait instead of just refusing.
   const awaitingAck = files.filter((f) => isAwaitingAck(f, caps, batch)).length;
   const blocked = files.filter((f) => isBlocked(f, batch)).length;
@@ -122,17 +133,8 @@ function Converter() {
                 选择保存目录
               </button>
             )}
-            {/* IDB 暂存：不支持 FSAA 时手动启用，产物写入临时数据库 */}
-            {!canSaveToFolder() && files.some((f) => f.status === 'ready') && drainMode === 'none' && (
-              <button
-                type="button"
-                onClick={() => void enableIdbDrain()}
-                className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm"
-              >
-                <Database className="size-3.5" />
-                启用本地暂存
-              </button>
-            )}
+            {/* FSAA unavailable → IDB drain is already on (see the effect above); there is
+                nothing left to ask the user, so no button here. */}
             {drainMode === 'folder' && (
               <>
                 <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
@@ -161,7 +163,7 @@ function Converter() {
               ) : (
                 <Play className="size-3.5" />
               )}
-              {running > 0 ? `转换中（${running}）` : `开始转换（${readyCount}）`}
+              {running > 0 ? `转换中（${pendingCount}）` : `开始转换（${readyCount}）`}
             </button>
 
             {drainMode === 'folder' ? (
@@ -170,14 +172,18 @@ function Converter() {
                 已保存（{doneCount}）
               </span>
             ) : (
+              // The count is finished tasks, not "done with blob still in memory": in IDB
+              // drain mode the blob is released on purpose, and `downloadAll` reads it back
+              // on demand — a count that drops to zero there would disable a working button
+              // and deny work the loop can actually do.
               <button
                 type="button"
                 onClick={downloadAll}
-                disabled={hasDownloadable === 0}
+                disabled={doneCount === 0}
                 className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:opacity-40"
               >
                 <Download className="size-3.5" />
-                全部下载（{hasDownloadable}）
+                全部下载（{doneCount}）
               </button>
             )}
 
@@ -190,13 +196,6 @@ function Converter() {
               <Trash2 className="size-3.5" />
               清除已完成
             </button>
-
-            {drainMode === 'idb' && doneCount > 0 && (
-              <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
-                <Database className="size-3" />
-                产物暂存在本地，刷新页面后清空
-              </span>
-            )}
 
             {awaitingAck > 0 && (
               <span className="text-muted-foreground text-xs">
