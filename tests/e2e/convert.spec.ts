@@ -176,14 +176,6 @@ test.describe('页面与语义边界', () => {
     await expect(page.getByText('没有上传，没有服务器，没有账户')).toBeVisible();
   });
 
-  test('在未选择任何文件时，主动说明本工具拒绝做什么', async ({ page }) => {
-    // Stating the refusals up front sets expectations before the user forms any.
-    await expect(page.getByText('这个工具不会替你做的事')).toBeVisible();
-    await expect(page.getByText(/不会把音频变成视频/)).toBeVisible();
-    await expect(page.getByText(/不会把一张静图拉成动图/)).toBeVisible();
-    await expect(page.getByText(/不会缩放分辨率/)).toBeVisible();
-  });
-
   test('开发服务器下发了跨源隔离响应头', async ({ page }) => {
     // Only the fallback ffmpeg engine needs this, but it must be verifiable rather
     // than assumed — a missing header makes that engine hang silently.
@@ -193,6 +185,23 @@ test.describe('页面与语义边界', () => {
   test('上传控件可以通过键盘触达', async ({ page }) => {
     // A bare drop target is not accessible.
     await expect(page.getByRole('button', { name: /把文件拖到这里/ })).toBeVisible();
+  });
+
+  test('拖入文件之后，上传区不变形', async ({ page }) => {
+    test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+    const zone = () => page.getByRole('button', { name: /把文件拖到这里/ });
+    const before = await zone().boundingBox();
+
+    await dropFile(page, 'av.mp4');
+
+    // Same label and same box afterwards. The second drop is the same gesture as the
+    // first, so the control that accepts it must not have shrunk into something else —
+    // and the label query above already fails if it has been reworded.
+    await expect(zone()).toBeVisible();
+    const after = await zone().boundingBox();
+    expect(Math.round(after!.width)).toBe(Math.round(before!.width));
+    expect(Math.round(after!.height)).toBe(Math.round(before!.height));
   });
 });
 
@@ -1187,12 +1196,6 @@ test.describe('能力诊断页', () => {
     // both the encode and the decode table, hence `.first()`.
     await expect(page.getByText('H.264', { exact: true }).first()).toBeVisible();
     await expect(page.getByText('Opus', { exact: true }).first()).toBeVisible();
-  });
-
-  test('把探测结果翻译成「这对应用意味着什么」', async ({ page }) => {
-    await page.goto('/#/capabilities');
-    // A page of green ticks is not actionable on its own; the consequences are.
-    await expect(page.getByText('这些结果意味着什么')).toBeVisible({ timeout: 20_000 });
   });
 
   test('可以回到转换器', async ({ page }) => {

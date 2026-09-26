@@ -87,18 +87,13 @@ function Converter() {
     <div className="mx-auto max-w-3xl px-5 py-10">
       <header className="mb-7">
         <h1 className="text-2xl font-semibold tracking-tight">Web Format Factory</h1>
-        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-          影像与音频的格式互转，全部在这台设备上完成。
-          <span className="text-foreground"> 转换前会告诉你代价</span>
-          ——会丢什么、会不会重新压缩、哪些格式做不到以及为什么。
-        </p>
       </header>
 
-      <Dropzone onFiles={onFiles} compact={files.length > 0} />
+      <Dropzone onFiles={onFiles} />
 
       {files.length > 0 && (
         <>
-          <div className="border-border mt-6 flex flex-wrap items-center gap-2 border-y py-3">
+          <div className="mt-6 flex flex-wrap items-center gap-2 py-3">
             <button
               type="button"
               onClick={startAll}

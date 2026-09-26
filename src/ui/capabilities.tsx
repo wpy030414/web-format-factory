@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CircleCheck, CircleX, Loader2, ShieldCheck } from 'lucide-react';
+import { CircleCheck, CircleX, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
 import { probeCapabilities, type Capabilities, type CodecTable } from '@/core/caps.ts';
 import { codecLabel } from '@/core/codecs.ts';
@@ -24,11 +24,6 @@ export function CapabilitiesPage() {
     <div className="mx-auto max-w-3xl px-5 py-10">
       <header className="mb-7">
         <h1 className="text-2xl font-semibold tracking-tight">本机能力诊断</h1>
-        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-          这里报告的每一项都是<span className="text-foreground">实测</span>出来的，
-          而不是根据浏览器名称推断的。转换器只提供它探测到确实可用的路由，
-          所以这一页也解释了「为什么某个目标格式在这里是灰的」。
-        </p>
         <a href="#/" className="text-muted-foreground hover:text-foreground mt-3 inline-block text-xs">
           ← 返回转换器
         </a>
@@ -72,54 +67,9 @@ export function CapabilitiesPage() {
           <CodecSection title="视频解码" table={caps.videoDecode} />
           <CodecSection title="音频编码" table={caps.audioEncode} />
           <CodecSection title="音频解码" table={caps.audioDecode} />
-
-          <Section title="这些结果意味着什么">
-            <Meaning caps={caps} />
-          </Section>
         </div>
       )}
-
-      <footer className="text-muted-foreground border-border mt-10 flex items-center gap-1.5 border-t pt-5 text-xs">
-        <ShieldCheck className="size-3.5 shrink-0" />
-        这一页不发送任何数据，探测全部在这台设备上完成。
-      </footer>
     </div>
-  );
-}
-
-function Meaning({ caps }: { caps: Capabilities }) {
-  const lines: string[] = [];
-
-  if (!caps.crossOriginIsolated) {
-    lines.push(
-      '未开启跨源隔离 → 动态 WebP 编码与 Live Photo 的配对标识写入不可用（两者都需要兜底引擎）。',
-    );
-  }
-  if (!caps.audioEncode.mp3) {
-    lines.push('无法编码 MP3 → 目标是 MP3 时会加载 LAME 编码器扩展。');
-  }
-  if (!caps.audioEncode.flac) {
-    lines.push('无法编码 FLAC → 目标是 FLAC 时会加载 libFLAC 扩展。');
-  }
-  if (!caps.videoEncode.hevc) {
-    lines.push('无法编码 H.265 → 目标选 H.265 时会落到其他编码器。');
-  }
-  if (!caps.videoEncode.vp9) {
-    lines.push('无法编码 VP9 → MP4 转 WebM 这类转换在此机器上不可用。');
-  }
-  if (!caps.videoEncode.av1) {
-    lines.push('无法编码 AV1 → AV1 输出不可用（浏览器与 stock 兜底核心都不支持）。');
-  }
-  if (lines.length === 0) {
-    lines.push('没有发现缺失的能力，本机可以使用全部路由。');
-  }
-
-  return (
-    <ul className="text-muted-foreground space-y-1.5 text-xs leading-relaxed">
-      {lines.map((l, i) => (
-        <li key={i}>· {l}</li>
-      ))}
-    </ul>
   );
 }
 
