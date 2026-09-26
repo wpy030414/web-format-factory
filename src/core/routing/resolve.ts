@@ -102,6 +102,11 @@ export function planFor(
     };
   }
 
+  // Whether the encoded bytes survive untouched decides the honesty verdict, the speed
+  // badge, and which of the machine's doors apply — so it is settled up front, from codec
+  // compatibility, and never assumed from the verdict kind.
+  const copyable = verdict.kind === 'direct' && canCopyPayload(profile, target, params);
+
   // Semantically fine, but not on this machine.
   //
   // Applied here rather than inside `verdictFor()` so that function stays a statement
@@ -110,7 +115,7 @@ export function planFor(
   // here", and the difference is the whole point: a route that is offered and then fails
   // at the end of the job teaches the user nothing, while a disabled button carrying a
   // reason teaches them what to do about it.
-  const shut = shutGate(profile, target, params, caps);
+  const shut = shutGate({ profile, target, params, caps, verdict, copyable });
   if (shut) {
     return {
       target,
@@ -130,9 +135,6 @@ export function planFor(
   const sourceVideo = profile.videoTracks[0];
   const sourceAudio = profile.audioTracks[0];
 
-  // Whether the bytes survive decides both the honesty verdict and the speed badge, so
-  // it is derived from codec compatibility — never assumed from the verdict kind.
-  const copyable = verdict.kind === 'direct' && canCopyPayload(profile, target, params);
   const shape: RouteShape = {
     payload: copyable ? 'preserved' : 'reencoded',
     mediaClass: verdict.kind === 'project' ? 'changed' : 'same',

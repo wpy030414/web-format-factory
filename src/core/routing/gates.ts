@@ -1,12 +1,14 @@
 import type { FormatId } from '../types.ts';
 import type { MediaProfile } from '../probe/profile.ts';
+import { getFormat } from '../registry/formats.ts';
+import type { Verdict } from './transitions.ts';
 
 /**
- * What this machine can actually run, in the only two respects routing cares about.
+ * What this machine can actually run, in the respects routing cares about.
  *
  * Deliberately narrower than `Capabilities`. That type answers "what is this machine
  * like" for the diagnostic page, and almost all of it is worth *reporting* without
- * changing what may be offered. These two are different in kind: each one decides whether
+ * changing what may be offered. These are different in kind: each one decides whether
  * some engine can reach a target at all, so a route that ignores them is a button that
  * fails at the end of the job instead of a button that explains itself.
  *
@@ -17,8 +19,8 @@ export interface RouteCapabilities {
   /**
    * WebCodecs' frame-level image API.
    *
-   * The only way to take an animated WebP or APNG apart. MEDIABUNNY cannot read either —
-   * they are images, not videos — and no JS package encodes or decodes their frames.
+   * The only way to take an animated WebP or APNG apart. The media library cannot read
+   * either — they are images, not videos — and no JS package decodes their frames.
    */
   imageDecoder: boolean;
   /**
@@ -31,7 +33,7 @@ export interface RouteCapabilities {
 }
 
 /**
- * Read the two gates off the environment.
+ * Read the gates off the environment.
  *
  * Both answers are synchronous — an API's presence and a flag on `self` — so the planner
  * never has to wait for a probe before it can say what it offers, and the store can hold
@@ -53,6 +55,48 @@ export interface ShutGate {
   detail: string;
 }
 
+/** Everything a door is allowed to look at. */
+export interface GateContext {
+  profile: Pick<MediaProfile, 'mediaClass' | 'container' | 'videoTracks' | 'audioTracks'>;
+  target: FormatId;
+  params: Readonly<Record<string, unknown>>;
+  caps: RouteCapabilities;
+  verdict: Verdict;
+  /**
+   * Will the encoded bytes be carried over untouched?
+   *
+   * The codec doors turn on this: a container change copies the packets and decodes
+   * nothing, so asking whether this machine can decode them would be asking a question
+   * whose answer does not bear on the job.
+   */
+  copyable: boolean;
+}
+
+type Door = (ctx: GateContext) => ShutGate | null;
+
+/**
+ * Every door a route has to get through, cheapest question first.
+ *
+ * Split out from `verdictFor()` on purpose. That function answers what is *possible*, and
+ * its answers are the same on every machine — which is what makes the exhaustive 225-pair
+ * snapshot test worth having. These answer what is possible *here*, and they are the layer
+ * the UI's disabled buttons and their reasons come from.
+ *
+ * Order matters when more than one is shut: the first one reported should be the one that
+ * would stop the job first, so the reason shown is the one worth acting on.
+ */
+const DOORS: readonly Door[] = [fallbackEngineDoor, imageDecoderDoor, decoderDoor];
+
+export function shutGate(ctx: GateContext): ShutGate | null {
+  for (const door of DOORS) {
+    const shut = door(ctx);
+    if (shut) return shut;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ the doors */
+
 /**
  * Targets with no writer outside the fallback engine.
  *
@@ -70,6 +114,23 @@ const FFMPEG_ONLY_TARGETS: ReadonlySet<FormatId> = new Set<FormatId>([
   'apng',
   'live-photo',
 ]);
+
+const FFMPEG_SHUT: ShutGate = {
+  reason: 'engine-unavailable',
+  detail: '兜底引擎（ffmpeg）',
+};
+
+function fallbackEngineDoor({ target, params, caps }: GateContext): ShutGate | null {
+  if (caps.crossOriginIsolated) return null;
+  if (FFMPEG_ONLY_TARGETS.has(target)) return FFMPEG_SHUT;
+
+  // Ogg's Vorbis encoder lives there too. Unlike the three above this one is a parameter
+  // rather than the target: the same Ogg target defaults to Opus, which the primary
+  // engine writes with no engine download at all.
+  if (target === 'ogg' && params.codec === 'vorbis') return FFMPEG_SHUT;
+
+  return null;
+}
 
 /**
  * Targets reachable only by taking a frame sequence apart with the browser's own decoder.
@@ -98,49 +159,45 @@ const IMAGE_DECODER_ONLY_TARGETS: ReadonlySet<FormatId> = new Set<FormatId>([
 /** Containers holding a frame sequence with no track structure: the browser-only cases. */
 const IMAGE_DECODER_CONTAINERS: ReadonlySet<string> = new Set(['webp', 'png']);
 
-/**
- * The gate, if one is shut for this route.
- *
- * Split out from `verdictFor()` on purpose. That function answers what is *possible*, and
- * its answers are the same on every machine — which is what makes the exhaustive
- * 225-pair snapshot test worth having. This one answers what is possible *here*, and it
- * is the layer the UI's disabled buttons and their reasons come from.
- */
-export function shutGate(
-  profile: Pick<MediaProfile, 'mediaClass' | 'container'>,
-  target: FormatId,
-  params: Readonly<Record<string, unknown>>,
-  caps: RouteCapabilities,
-): ShutGate | null {
-  if (!caps.crossOriginIsolated) {
-    if (FFMPEG_ONLY_TARGETS.has(target)) return FFMPEG_SHUT;
-
-    // Ogg's Vorbis encoder lives there too. Unlike the three above this one is a
-    // parameter rather than the target: the same Ogg target defaults to Opus, which the
-    // primary engine writes with no engine download at all.
-    if (target === 'ogg' && params.codec === 'vorbis') return FFMPEG_SHUT;
-  }
-
-  return decoderGate(profile, target, caps);
-}
-
-const FFMPEG_SHUT: ShutGate = {
-  reason: 'engine-unavailable',
-  detail: '兜底引擎（ffmpeg）',
-};
-
-function decoderGate(
-  profile: Pick<MediaProfile, 'mediaClass' | 'container'>,
-  target: FormatId,
-  caps: RouteCapabilities,
-): ShutGate | null {
+function imageDecoderDoor({ profile, target, caps }: GateContext): ShutGate | null {
   if (caps.imageDecoder) return null;
   if (profile.mediaClass !== 'animated-image') return null;
   if (!IMAGE_DECODER_CONTAINERS.has(profile.container)) return null;
   if (!IMAGE_DECODER_ONLY_TARGETS.has(target)) return null;
 
-  return {
-    reason: 'no-decoder-in-browser',
-    detail: '动态 WebP / APNG 的帧序列',
-  };
+  return { reason: 'no-decoder-in-browser', detail: '动态 WebP / APNG 的帧序列' };
+}
+
+/**
+ * The source has to be taken apart before it can be put back together.
+ *
+ * `decodable` is measured per track when the file is probed, by putting the media
+ * library's own question to it — the same one it will ask again when the job runs. So
+ * this is the library's answer rather than a guess from a codec name, and the two can
+ * never disagree. Until this door existed the field was measured and then read by nobody:
+ * the profile's comment promised a `no-decoder-in-browser` refusal that no code produced.
+ *
+ * Three exclusions, each because a door that fires too wide disables routes that work —
+ * the mirror image of the failure doors exist to prevent:
+ *
+ * - a container change copies the packets and decodes nothing;
+ * - exporting the still half of a bundle never touches its video, so an HEVC Live Photo
+ *   must still export its JPEG on a browser that cannot decode HEVC;
+ * - a target that carries no sound never needs the source's audio decoded, which is why
+ *   a video with an unreadable soundtrack can still become a GIF.
+ */
+function decoderDoor({ profile, target, verdict, copyable }: GateContext): ShutGate | null {
+  if (copyable) return null;
+  if (verdict.kind === 'project' && verdict.projector === 'split-still') return null;
+
+  const spec = getFormat(target);
+  const needed = [
+    ...profile.videoTracks,
+    ...(spec.codecs.audio?.length ? profile.audioTracks : []),
+  ];
+
+  const blocked = needed.find((track) => !track.decodable);
+  if (!blocked) return null;
+
+  return { reason: 'no-decoder-in-browser', detail: blocked.codec.toUpperCase() };
 }
