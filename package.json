@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:prod": "playwright test --config=playwright.prod.config.ts",
     "fixtures": "bash scripts/gen-fixtures.sh && node --experimental-strip-types scripts/make-livephoto-fixtures.ts",
     "engines": "node scripts/copy-engines.mjs"
   },
