@@ -34,10 +34,17 @@ export function snapToGrid(ms: number): number {
   return Math.round(ms / GIF_DELAY_GRID_MS) * GIF_DELAY_GRID_MS;
 }
 
-/** Force a value into something a GIF can hold. Never returns 0, NaN or a negative. */
-export function clampDelay(ms: number): number {
+/**
+ * Force a value into something a GIF can hold. Never returns 0, NaN or a negative.
+ *
+ * `floorMs` defaults to the 20 ms renderers honour, which is right whenever we are
+ * *choosing* a timing. Re-encoding a file that already has one — a GIF whose author picked
+ * its own delays — passes the grid instead, so the frame count survives and nothing is
+ * slowed down that the user did not ask to slow down.
+ */
+export function clampDelay(ms: number, floorMs: number = GIF_MIN_DELAY_MS): number {
   if (!Number.isFinite(ms)) return DEFAULT_FRAME_DELAY_MS;
-  return Math.min(GIF_MAX_DELAY_MS, Math.max(GIF_MIN_DELAY_MS, snapToGrid(ms)));
+  return Math.min(GIF_MAX_DELAY_MS, Math.max(floorMs, snapToGrid(ms)));
 }
 
 /**

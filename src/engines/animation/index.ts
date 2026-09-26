@@ -26,6 +26,17 @@ import {
   type EngineRequest,
   type EngineResult,
 } from '../types.ts';
+import {
+  clampDelay,
+  decideRegime,
+  DEFAULT_FRAME_DELAY_MS,
+  delaySecondsForVideo,
+  GIF_DELAY_GRID_MS,
+  GIF_MIN_DELAY_MS,
+  planGrid,
+  snapToGrid,
+  stepCumulative,
+} from './timing.ts';
 
 /**
  * The animation engine: the class transitions that involve a frame sequence.
@@ -33,13 +44,19 @@ import {
  * Both directions are projections — video becomes an animation, or an animation becomes
  * a video — and both are reported as such rather than dressed up as plain conversions.
  *
- * GIF timing works in centiseconds, so 10 ms is the finest interval it can express. We
- * preserve the source timing and let the loss model report the quantisation, rather than
- * quietly resampling to some "web friendly" rate the user never asked for.
+ * Frame timing is where this engine can lie without meaning to. A GIF delay is a 16-bit
+ * count of centiseconds, so 10 ms is the finest interval the format can express; renderers
+ * clamp anything under 20 ms up to 100 ms, so 50 fps is the fastest a GIF can honestly
+ * play; and the encoder floors whatever it is handed, so a delay that is not a whole
+ * number of 10 ms steps is rounded *down* in silence. The rules that follow from those
+ * three facts, and the measurements behind them, live in `./timing.ts`.
+ *
+ * What follows here: the source's timing is preserved, and what cannot be preserved is
+ * reported. Conforming a source faster than 50 fps to what the format can hold is a loss,
+ * not an edit — nobody chose a frame rate — and the loss model says so rather than leaving
+ * the user to notice that their sixty frames a second came out slower.
  */
 
-const GIF_CENTISECONDS_PER_SECOND = 100;
-const GIF_MIN_DELAY = 1; // 10 ms
 const GIF_MAX_COLORS = 255; // the encoder reserves one index for transparency
 
 /**
@@ -69,7 +86,7 @@ const VIDEO_CODECS: Partial<Record<FormatId, string>> = {
 interface DecodedFrame {
   width: number;
   height: number;
-  /** Delay in centiseconds, as stored in the GIF. */
+  /** Delay in milliseconds — the unit the encoder takes, and the one the grid is in. */
   delay: number;
   data: Uint8ClampedArray;
 }
@@ -166,66 +183,162 @@ async function videoToGif(
     throw new EngineError('这个浏览器无法解码该视频轨道', 'decode-failed');
   }
 
+  // Where this track's own timeline starts — not zero. A file whose first frame arrives
+  // late would otherwise carry that lateness on its first frame, and `canvases(0)` yields
+  // nothing at all for such a file, which is how it used to fail with "no usable frames".
+  const originMs = Math.max(0, (await track.getFirstTimestamp()) * 1000);
+  const durationMs = await track
+    .computeDuration()
+    .then((seconds) => seconds * 1000)
+    .catch(() => Number.NaN);
+
+  // How this source is laid onto a GIF's timeline, decided from the track's real packet
+  // timestamps rather than from whatever the container claims. Both branches below are
+  // decided here, before a single frame is decoded.
+  const regime = decideRegime(
+    await track.computeFrameRateMetrics().then(
+      (metrics) => ({
+        average: metrics.averageFrameRate,
+        max: metrics.maxFrameRate,
+        constant: metrics.frameRateIsConstant,
+      }),
+      // The probe for the loss report asks the same question, and the two are deliberately
+      // independent: this one decides what gets written, that one decides what the user is
+      // told, and neither is entitled to the other's answer.
+      () => undefined,
+    ),
+  );
+
   const sink = new CanvasSink(track);
 
-  // The first frame settles dimensions, which the encoder needs before it can start.
-  const first = await sink.getCanvas(0);
-  if (!first) throw new EngineError('视频里没有可用的帧', 'decode-failed');
-
-  const canvas0 = first.canvas;
-  const encoder = new Encoder({
-    width: canvas0.width,
-    height: canvas0.height,
-    maxColors,
-    ...(dither ? { dither } : {}),
-  });
-
+  let encoder: Encoder | undefined;
+  let scratch: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D } | undefined;
   let count = 0;
-
-  // One scratch canvas, reused for every frame.
-  //
-  // The encoder is handed raw pixels rather than the source canvas on purpose: given a
-  // canvas it reaches for `document.createElement('canvas')` — which does not exist in
-  // a worker — so its CanvasImageSource path is main-thread only.
-  const scratch = new OffscreenCanvas(canvas0.width, canvas0.height);
-  const scratchCtx = scratch.getContext('2d');
-  if (!scratchCtx) throw new EngineError('无法创建绘图上下文', 'encode-failed');
 
   // Frames go to the encoder one at a time rather than being collected first: holding a
   // few hundred RGBA canvases would cost gigabytes, where the encoder's own indexed
   // representation is a quarter of that.
-  const push = async (canvas: HTMLCanvasElement | OffscreenCanvas, durationSec: number) => {
+  //
+  // The encoder is handed raw pixels rather than the source canvas on purpose: given a
+  // canvas it reaches for `document.createElement('canvas')` — which does not exist in a
+  // worker — so its CanvasImageSource path is main-thread only. Both the encoder and the
+  // scratch canvas wait for the first frame that is actually kept, because that frame is
+  // what sizes them.
+  const push = async (canvas: HTMLCanvasElement | OffscreenCanvas, delayMs: number) => {
     if (signal?.aborted) throw new EngineError('已取消', 'aborted');
     if (count >= MAX_FRAMES) throw tooManyFrames(count);
 
-    scratchCtx.clearRect(0, 0, scratch.width, scratch.height);
-    scratchCtx.drawImage(canvas, 0, 0);
-    const pixels = scratchCtx.getImageData(0, 0, scratch.width, scratch.height).data;
-
-    await encoder.encode({
-      data: pixels,
-      delay: Math.max(
-        GIF_MIN_DELAY,
-        Math.round(durationSec * GIF_CENTISECONDS_PER_SECOND),
-      ),
+    encoder ??= new Encoder({
+      width: canvas.width,
+      height: canvas.height,
+      maxColors,
+      ...(dither ? { dither } : {}),
     });
+    scratch ??= scratchCanvas(canvas.width, canvas.height);
+    const { canvas: target, ctx } = scratch;
+
+    ctx.clearRect(0, 0, target.width, target.height);
+    ctx.drawImage(canvas, 0, 0);
+    const pixels = ctx.getImageData(0, 0, target.width, target.height).data;
+
+    await encoder.encode({ data: pixels, delay: clampDelay(delayMs) });
     count += 1;
     onProgress?.({ phase: 'encoding', ratio: undefined, frames: { done: count, total: 0 } });
   };
 
-  await push(canvas0, first.duration);
-
-  // `canvases(0)` restarts from the beginning, so skip the frame already taken.
-  let skippedFirst = false;
-  for await (const frame of sink.canvases(0)) {
-    if (!skippedFirst) {
-      skippedFirst = true;
-      continue;
-    }
-    await push(frame.canvas, frame.duration);
+  if (regime === 'grid' && Number.isFinite(durationMs) && durationMs > originMs) {
+    await pushGrid(sink, planGrid(originMs, durationMs), push);
+  } else {
+    await pushCumulative(sink, originMs, durationMs, push);
   }
 
+  if (!encoder) throw new EngineError('视频里没有可用的帧', 'decode-failed');
   return encoder.flush('blob');
+}
+
+/** Whichever frame we hand the encoder next: the grid regime, or the cumulative one. */
+type PushFrame = (canvas: HTMLCanvasElement | OffscreenCanvas, delayMs: number) => Promise<void>;
+
+/**
+ * A source faster than the format can hold: sample it onto the grid of 20 ms slots.
+ *
+ * Every slot gets one frame, so the output plays at the fastest rate a GIF can honestly
+ * play and lasts exactly as long as the source did. The frames in between are dropped —
+ * which the loss model reports, because a user who filmed at 60 fps is entitled to know
+ * that a fifth of their frames are not in the file.
+ */
+async function pushGrid(sink: CanvasSink, plan: ReturnType<typeof planGrid>, push: PushFrame) {
+  // The output frame count is known before anything is decoded, so a source that cannot
+  // fit is refused up front instead of halfway through.
+  if (plan.stampsMs.length > MAX_FRAMES) throw tooManyFrames(plan.stampsMs.length);
+
+  let pendingMs = 0;
+  let index = 0;
+  for await (const frame of sink.canvasesAtTimestamps(plan.stampsMs.map((ms) => ms / 1000))) {
+    const delayMs = plan.delaysMs[index] ?? GIF_MIN_DELAY_MS;
+    index += 1;
+
+    // A slot that resolves to no frame hands its time to the next one that does, so the
+    // timeline stays where the source put it rather than losing a slot's worth of it.
+    if (!frame) {
+      pendingMs += delayMs;
+      continue;
+    }
+
+    await push(frame.canvas, pendingMs + delayMs);
+    pendingMs = 0;
+  }
+}
+
+/**
+ * A source the format can hold: one frame at a time, each closed by its successor.
+ *
+ * The lookahead is load-bearing. A frame's end time comes from the *next* frame's start,
+ * because `VideoFrame.duration` is frequently null and a NaN reaching the encoder's
+ * `floor(delay / 10)` writes a zero delay — the very defect this path exists to avoid.
+ *
+ * Holding a frame's canvas across one iteration is safe because `CanvasSink` is given no
+ * `poolSize`: every frame comes back in a canvas of its own. Give it a pool and this would
+ * have to copy instead.
+ */
+async function pushCumulative(
+  sink: CanvasSink,
+  originMs: number,
+  durationMs: number,
+  push: PushFrame,
+) {
+  let held: { canvas: HTMLCanvasElement | OffscreenCanvas; startMs: number } | undefined;
+  let cursorMs = snapToGrid(originMs);
+  let lastIntervalMs = DEFAULT_FRAME_DELAY_MS;
+
+  for await (const frame of sink.canvases(originMs / 1000)) {
+    const startMs = frame.timestamp * 1000;
+
+    if (held) {
+      lastIntervalMs = Math.max(
+        GIF_DELAY_GRID_MS,
+        snapToGrid(startMs) - snapToGrid(held.startMs),
+      );
+      const step = stepCumulative(startMs, cursorMs);
+      if (step.delayMs !== null) {
+        cursorMs = step.cursorMs;
+        await push(held.canvas, step.delayMs);
+      }
+    }
+
+    held = { canvas: frame.canvas, startMs };
+  }
+
+  if (held) {
+    // The last frame has no successor to close it: the track's own duration ends it, and
+    // failing that, the interval it was running at.
+    const endMs =
+      Number.isFinite(durationMs) && durationMs > held.startMs
+        ? durationMs
+        : held.startMs + lastIntervalMs;
+    const step = stepCumulative(endMs, cursorMs);
+    await push(held.canvas, step.delayMs ?? GIF_MIN_DELAY_MS);
+  }
 }
 
 /* ------------------------------------------------------------------ GIF → video */
@@ -257,9 +370,10 @@ async function framesToVideo(
   let t = 0;
   for (const frame of frames) {
     ctx.putImageData(toImageData(frame), 0, 0);
-    // A GIF delay of zero means "as fast as the renderer likes", which every
-    // implementation treats as 10 ms.
-    const duration = Math.max(GIF_MIN_DELAY, frame.delay) / GIF_CENTISECONDS_PER_SECOND;
+    // The target is a video container, not a GIF: its timestamps are exact, so the 20 ms
+    // floor GIF's renderers impose does not apply here — only the grid the delay was
+    // stored in, and a guard against a frame that carried no usable timing at all.
+    const duration = delaySecondsForVideo(frame.delay);
     await source.add(t, duration);
     t += duration;
   }
@@ -378,7 +492,7 @@ async function decodeImageAnimation(blob: Blob): Promise<DecodedFrame[] | null> 
         frames.push({
           width: canvas.width,
           height: canvas.height,
-          delay: delayCentiseconds(image.duration),
+          delay: delayMilliseconds(image.duration),
           // A fresh buffer per frame by necessity: the canvas is reused, so the pixels
           // have to be copied out before the next frame is drawn over them.
           data: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
@@ -404,16 +518,19 @@ function scratchCanvas(width: number, height: number) {
 }
 
 /**
- * WebCodecs reports frame durations in microseconds; GIF counts in centiseconds, which
- * is where its famous 10 ms granularity comes from.
+ * WebCodecs reports frame durations in microseconds; the delay grid is in milliseconds,
+ * which is where GIF's famous 10 ms granularity comes from.
+ *
+ * The value is left unsnapped on purpose: snapping each interval on its own is what makes
+ * a timeline drift, so the rounding belongs to whoever can see the accumulated total.
  */
-function delayCentiseconds(duration: number | null | undefined): number {
-  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
+function delayMilliseconds(durationUs: number | null | undefined): number {
+  if (typeof durationUs !== 'number' || !Number.isFinite(durationUs) || durationUs <= 0) {
     // A missing duration means "as fast as the renderer likes", which every
     // implementation settles at 100 ms.
-    return GIF_MIN_DELAY * 10;
+    return DEFAULT_FRAME_DELAY_MS;
   }
-  return Math.max(GIF_MIN_DELAY, Math.round(duration / 10_000));
+  return Math.max(GIF_DELAY_GRID_MS, durationUs / 1000);
 }
 
 /** Re-encode an existing frame sequence into a GIF, applying new palette settings. */
@@ -435,16 +552,26 @@ async function encodeFrames(
     ...(dither ? { dither } : {}),
   });
 
+  // Re-encoded onto the source's own timeline: each delay is measured from where the
+  // output has got to, then snapped to the grid — not floored frame by frame, which is
+  // how a 33 ms frame becomes 30 ms and a ten-second animation quietly loses a second.
+  //
+  // The frame count is left alone here. A file that already has timing keeps all of it;
+  // conforming to the 20 ms floor is for sources whose timing we are choosing.
+  let elapsedMs = 0;
+  let writtenMs = 0;
   let done = 0;
   for (const frame of frames) {
     if (signal?.aborted) throw new EngineError('已取消', 'aborted');
 
+    elapsedMs +=
+      Number.isFinite(frame.delay) && frame.delay > 0 ? frame.delay : DEFAULT_FRAME_DELAY_MS;
+    const delayMs = clampDelay(snapToGrid(elapsedMs) - writtenMs, GIF_DELAY_GRID_MS);
+    writtenMs += delayMs;
+
     // Raw pixels straight through. Going via a canvas would send the encoder down its
     // `document.createElement('canvas')` path, which does not exist in a worker.
-    await encoder.encode({
-      data: asPixels(frame.data),
-      delay: Math.max(GIF_MIN_DELAY, frame.delay),
-    });
+    await encoder.encode({ data: asPixels(frame.data), delay: delayMs });
     done += 1;
     onProgress?.({ phase: 'encoding', ratio: done / frames.length, frames: { done, total: frames.length } });
   }
@@ -490,7 +617,7 @@ async function isGif(blob: Blob): Promise<boolean> {
  */
 function tooManyFrames(count: number): EngineError {
   return new EngineError(
-    `这段内容有 ${count} 帧，超过 ${MAX_FRAMES} 帧的上限。GIF 编码需要在内存里保留每一帧，` +
+    `要输出 ${count} 帧，超过 ${MAX_FRAMES} 帧的上限。GIF 编码需要在内存里保留每一帧，` +
       `继续下去会把页面拖垮。请先把它裁短一些，或改用视频格式。`,
     'out-of-memory',
   );
