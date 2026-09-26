@@ -33,6 +33,7 @@ export function App() {
 function Converter() {
   const files = useStore((s) => s.files);
   const running = useStore((s) => s.running);
+  const caps = useStore((s) => s.caps);
   const addFiles = useStore((s) => s.addFiles);
   const startAll = useStore((s) => s.startAll);
   const downloadAll = useStore((s) => s.downloadAll);
@@ -49,7 +50,7 @@ function Converter() {
     (f: (typeof files)[number]): boolean => {
       if (!f.profile || !f.target) return false;
       if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-      const plan = planFor(f.profile, f.target, f.params ?? {});
+      const plan = planFor(f.profile, f.target, caps, f.params ?? {});
       if (!plan.feasible) return false;
       // A file waiting on acknowledgement is not ready. Counting it as ready would
       // enable a button that then does nothing at all — a silent no-op, which is worse
@@ -57,7 +58,7 @@ function Converter() {
       if (plan.needsAcknowledgement && !f.acknowledged) return false;
       return true;
     },
-    [files],
+    [files, caps],
   );
 
   const readyCount = files.filter(isActionable).length;
@@ -67,7 +68,7 @@ function Converter() {
   const awaitingAck = files.filter((f) => {
     if (!f.profile || !f.target) return false;
     if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-    const plan = planFor(f.profile, f.target, f.params ?? {});
+    const plan = planFor(f.profile, f.target, caps, f.params ?? {});
     return plan.feasible && plan.needsAcknowledgement && !f.acknowledged;
   }).length;
   const blocked = files.filter(

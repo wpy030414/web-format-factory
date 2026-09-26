@@ -6,6 +6,7 @@ import { FORMATS } from '../core/registry/formats.ts';
 import { pairLivePhotos, type PairingCandidate } from '../livephoto/detect.ts';
 import { buildLivp } from '../livephoto/pack.ts';
 import { planFor, type ResolvedPlan } from '../core/routing/resolve.ts';
+import { readRouteCapabilities, type RouteCapabilities } from '../core/routing/gates.ts';
 import type { FormatId } from '../core/types.ts';
 
 export type FileStatus = 'probing' | 'ready' | 'queued' | 'running' | 'done' | 'error' | 'cancelled';
@@ -47,6 +48,14 @@ interface State {
   files: FileEntry[];
   running: number;
   engine: MediaEngineClient | null;
+  /**
+   * What this machine can run.
+   *
+   * Held here rather than read inside the planner so the answer is one value that every
+   * part of the UI agrees on — the picker, the Convert button and the diagnostic page all
+   * have to say the same thing about what is available.
+   */
+  caps: RouteCapabilities;
 
   addFiles: (files: File[]) => Promise<void>;
   removeFile: (id: string) => void;
@@ -184,7 +193,7 @@ export const useStore = create<State>((set, get) => {
                     status: 'ready',
                     // Preselect a sensible target, or leave it null when nothing is
                     // feasible so the user sees the refusals rather than a guess.
-                    ...seedTarget(f, profile),
+                    ...seedTarget(f, profile, get().caps),
                   }
                 : f,
             ),
@@ -205,6 +214,7 @@ export const useStore = create<State>((set, get) => {
     files: [],
     running: 0,
     engine: null,
+    caps: readRouteCapabilities(),
 
     async addFiles(incoming) {
       await probeEntries(incoming.map(newEntry));
@@ -279,7 +289,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({
         files: s.files.map((f) => {
           if (!f.profile || !f.target) return f;
-          const plan = planFor(f.profile, f.target, f.params ?? {});
+          const plan = planFor(f.profile, f.target, get().caps, f.params ?? {});
           if (!plan.feasible) return f;
           // A critical loss must be acknowledged before we will start.
           if (plan.needsAcknowledgement && !f.acknowledged) return f;
@@ -306,7 +316,7 @@ export const useStore = create<State>((set, get) => {
       if (!entry?.profile || !entry.target) return null;
       // Parameters change the verdict: asking for a specific codec turns a lossless
       // container change into a re-encode, and the badges have to say so.
-      return planFor(entry.profile, entry.target, entry.params ?? {});
+      return planFor(entry.profile, entry.target, get().caps, entry.params ?? {});
     },
 
     downloadAll() {
@@ -415,8 +425,12 @@ async function mergePair(
  * seeding one without the other would leave the panel showing values the format does
  * not even accept.
  */
-function seedTarget(entry: FileEntry, profile: MediaProfile): Partial<FileEntry> {
-  const target = entry.target ?? pickDefaultTarget(profile);
+function seedTarget(
+  entry: FileEntry,
+  profile: MediaProfile,
+  caps: RouteCapabilities,
+): Partial<FileEntry> {
+  const target = entry.target ?? pickDefaultTarget(profile, caps);
   return {
     target,
     params: entry.params ?? (target ? defaultParamsFor(target) : {}),
@@ -448,7 +462,10 @@ function baseNameOf(name: string): string {
  * Only ever picks something that actually works: defaulting to an impossible target
  * would present a Convert button that refuses to do anything.
  */
-export function pickDefaultTarget(profile: MediaProfile): FormatId | null {
+export function pickDefaultTarget(
+  profile: MediaProfile,
+  caps: RouteCapabilities,
+): FormatId | null {
   const preferences: Record<string, FormatId[]> = {
     video: ['mp4', 'mkv', 'mov', 'webm'],
     audio: ['mp3', 'm4a', 'flac', 'wav'],
@@ -464,10 +481,10 @@ export function pickDefaultTarget(profile: MediaProfile): FormatId | null {
     // be equal, so that comparison silently never matched.
     (candidate) =>
       !FORMATS[candidate].containers.includes(profile.container as never) &&
-      planFor(profile, candidate).feasible,
+      planFor(profile, candidate, caps).feasible,
   );
 
-  const free = candidates.find((c) => planFor(profile, c).did === 'transmux');
+  const free = candidates.find((c) => planFor(profile, c, caps).did === 'transmux');
   return free ?? candidates[0] ?? null;
 }
 

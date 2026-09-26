@@ -5,6 +5,7 @@ import type { MediaProfile } from '../probe/profile.ts';
 import type { ContainerId, Fidelity, FormatId, RouteShape } from '../types.ts';
 import { IMPOSSIBILITY_COPY, type Impossibility } from './impossibility.ts';
 import { alternativesFor, verdictFor, type Verdict } from './transitions.ts';
+import { shutGate, type RouteCapabilities } from './gates.ts';
 import { ALL_FORMAT_IDS, FORMATS } from '../registry/formats.ts';
 
 /** A concrete plan for one file → one target, ready for the UI to render and confirm. */
@@ -70,10 +71,16 @@ function canCopyPayload(
  * This is where the routing table and the loss model meet: the verdict decides *whether*
  * the conversion can happen, the profile decides *what it costs*, and both are computed
  * from real facts rather than a static per-format list.
+ *
+ * `caps` is what this machine can run, and it is required rather than defaulted. A default
+ * would have to be either the optimistic answer — offering routes that then fail — or the
+ * pessimistic one, hiding routes that work; neither is a decision this function is
+ * entitled to make on the caller's behalf.
  */
 export function planFor(
   profile: MediaProfile,
   target: FormatId,
+  caps: RouteCapabilities,
   params: Readonly<Record<string, unknown>> = {},
 ): ResolvedPlan {
   const verdict = verdictFor(profile.mediaClass, target);
@@ -88,6 +95,30 @@ export function planFor(
         ...(verdict.reason === 'no-encoder-in-browser' && profile.videoTracks[0]
           ? { detail: profile.videoTracks[0].codec.toUpperCase() }
           : {}),
+        alternatives: alternativesFor(profile.mediaClass, ALL_FORMAT_IDS),
+      },
+      losses: [],
+      needsAcknowledgement: false,
+    };
+  }
+
+  // Semantically fine, but not on this machine.
+  //
+  // Applied here rather than inside `verdictFor()` so that function stays a statement
+  // about what is *possible*, identical on every browser — which is what makes its
+  // exhaustive snapshot test mean anything. This is the layer that answers "possible
+  // here", and the difference is the whole point: a route that is offered and then fails
+  // at the end of the job teaches the user nothing, while a disabled button carrying a
+  // reason teaches them what to do about it.
+  const shut = shutGate(profile, target, params, caps);
+  if (shut) {
+    return {
+      target,
+      feasible: false,
+      verdict: { kind: 'impossible', reason: shut.reason },
+      impossibility: {
+        reason: shut.reason,
+        detail: shut.detail,
         alternatives: alternativesFor(profile.mediaClass, ALL_FORMAT_IDS),
       },
       losses: [],
@@ -163,9 +194,10 @@ function sourceContainerIsLossless(container: ContainerId | 'unknown'): boolean 
 /** Convenience: plans for every target, used to render the picker. */
 export function planAllTargets(
   profile: MediaProfile,
+  caps: RouteCapabilities,
   params: Readonly<Record<string, unknown>> = {},
 ): ResolvedPlan[] {
-  return ALL_FORMAT_IDS.map((t) => planFor(profile, t, params));
+  return ALL_FORMAT_IDS.map((t) => planFor(profile, t, caps, params));
 }
 
 export { IMPOSSIBILITY_COPY, FORMATS };

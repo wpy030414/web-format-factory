@@ -37,11 +37,12 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   const unpair = useStore((s) => s.unpair);
   const pairManually = useStore((s) => s.pairManually);
   const allFiles = useStore((s) => s.files);
+  const caps = useStore((s) => s.caps);
   const [showImpossible, setShowImpossible] = useState(false);
 
   const plans = useMemo(
-    () => (entry.profile ? planAllTargets(entry.profile) : []),
-    [entry.profile],
+    () => (entry.profile ? planAllTargets(entry.profile, caps) : []),
+    [entry.profile, caps],
   );
   const feasible = plans.filter((p) => p.feasible);
   const impossible = plans.filter((p) => !p.feasible);
@@ -50,7 +51,9 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   // has to move with the settings that caused it.
   const params = entry.params ?? {};
   const active =
-    entry.profile && entry.target ? planFor(entry.profile, entry.target, params) : null;
+    entry.profile && entry.target
+      ? planFor(entry.profile, entry.target, caps, params)
+      : null;
 
   // Several targets usually fail for the same reason — an audio file cannot become a
   // video, a GIF, or a Live Photo, and listing that sentence six times buries the one
