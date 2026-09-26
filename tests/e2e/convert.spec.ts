@@ -47,6 +47,21 @@ function ffprobe(file: string): { formatName: string; codecs: string[] } {
   };
 }
 
+/** Drop several fixtures at once, optionally renaming them. */
+async function dropFiles(
+  page: Page,
+  items: Array<{ fixture: string; as: string }>,
+): Promise<void> {
+  await page.setInputFiles(
+    'input[type=file]',
+    items.map(({ fixture, as }) => ({
+      name: as,
+      mimeType: 'application/octet-stream',
+      buffer: readFileSync(join(FIXTURES, fixture)),
+    })),
+  );
+}
+
 async function dropFile(page: Page, fixture: string, asName?: string): Promise<void> {
   await page.setInputFiles('input[type=file]', {
     name: asName ?? fixture,
@@ -457,6 +472,42 @@ test.describe('Live Photo', () => {
 
     const saved = await convertAndSave(page, 'MP4', 'out.mp4');
     expect(ffprobe(saved).codecs).toContain('h264');
+  });
+
+  test('多文件拖入时，按配对标识合成一个 Live Photo 条目', async ({ page }) => {
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'pair-tagged.jpg', as: 'pair-tagged.jpg' },
+      { fixture: 'pair-tagged.mov', as: 'pair-tagged.mov' },
+    ]);
+
+    // Two files in, one entry out. Showing them separately would invite the user to
+    // convert each half on its own — exactly what they did not mean.
+    await expect(page.getByTestId('media-class')).toHaveCount(1, { timeout: 30_000 });
+    expect(await waitForClass(page)).toBe('Live Photo');
+
+    const note = page.getByTestId('pairing-note');
+    await expect(note).toBeVisible();
+    // How the match was made has to be stated: an identifier is evidence, a filename is
+    // a guess, and they are not equally trustworthy.
+    await expect(note).toContainText('相同的配对标识');
+
+    // And the assembled entry has to actually work. Pairing that produces a card the
+    // pipeline cannot convert would be worse than not pairing at all.
+    const saved = await convertAndSave(page, 'MP4', 'out.mp4');
+    expect(ffprobe(saved).codecs).toContain('h264');
+  });
+
+  test('标识缺失时退回按文件名配对，并如实说明这是猜测', async ({ page }) => {
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'still.jpg', as: 'holiday.jpg' },
+      { fixture: 'av.mov', as: 'holiday.mov' },
+    ]);
+
+    await expect(page.getByTestId('media-class')).toHaveCount(1, { timeout: 30_000 });
+    expect(await waitForClass(page)).toBe('Live Photo');
+    await expect(page.getByTestId('pairing-note')).toContainText('按文件名配对');
   });
 });
 

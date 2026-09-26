@@ -148,6 +148,8 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 | Apple `.livp` 打包 | ✅（用于已打标的 MOV） |
 | Apple MOV 打标（content identifier） | ✅ 经兜底引擎写入，端到端已验证 |
 | 视频 → Live Photo（静帧取自视频首帧） | ✅ |
+| 多文件拖入的自动配对 | ✅ 优先按标识，退回文件名 |
+| 手动配对 / 解除配对 | ⏳ 尚未提供 UI 入口 |
 | `still-image-time` 定时元数据轨道 | ⏳ 已知缺口，见下 |
 
 ### 打包器的自校验

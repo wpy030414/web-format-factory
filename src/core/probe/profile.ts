@@ -59,6 +59,14 @@ export interface MediaProfile {
    */
   livePhotoFlavor?: LivePhotoFlavor;
 
+  /**
+   * Apple's pairing identifier, when the file carries one.
+   *
+   * Present on the video half of a Live Photo. Two files sharing a value here are a pair
+   * beyond doubt, which is a far better basis for matching than filenames.
+   */
+  contentId?: string;
+
   /** Why the class is `unknown`, when it is — shown to the user verbatim. */
   unknownReason?: string;
 }

@@ -54,7 +54,8 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 主干引擎（Mediabunny）与「基于编码」的复制/转码判定
 - 图像线：JPEG / PNG / WebP 静图互转，含 EXIF 方向与透明通道处理
 - 动图线：视频 ↔ GIF 双向，含调色板与抖动
-- Live Photo：四种形态的识别与拆包，以及**从视频组装 Live Photo**（写入 Apple 配对标识）；
+- Live Photo：四种形态的识别与拆包、**从视频组装**（写入 Apple 配对标识）、
+  **多文件拖入的自动配对**（优先按配对标识，退回文件名并如实说明是猜测）；
   导出静图时会剥掉已经失效的 Motion Photo 声明
 - 兜底引擎（ffmpeg.wasm）：按需加载、跨源隔离检测、WORKERFS 挂载，用于动态 WebP 编码
   与 Live Photo 的配对标识写入
@@ -64,7 +65,8 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 
 尚未完成：
 
-- 多文件拖入时的 **Live Photo 配对界面**（配对逻辑已实现并有测试，缺 UI 入口）
+- 编码参数界面（参数定义与数据流已就绪，缺控件）
+- `/capabilities` 诊断页与部署配置样例（nginx / Caddy 的 COOP/COEP）
 - 编码参数的界面（`params` 目前为默认值）
 - 部署配置与 `/capabilities` 诊断页
 

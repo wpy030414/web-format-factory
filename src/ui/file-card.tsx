@@ -7,6 +7,7 @@ import {
   Loader2,
   CircleAlert,
   CircleCheck,
+  Link2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
 import { FORMATS } from '@/core/registry/formats.ts';
@@ -91,6 +92,28 @@ export function FileCard({ entry }: { entry: FileEntry }) {
           <X className="size-4" />
         </button>
       </div>
+
+      {/*
+        Say how the two halves were matched. An identifier match is evidence; a filename
+        match is a guess, and a user deciding whether to trust the pairing deserves to
+        know which one they got.
+      */}
+      {entry.paired && (
+        <p
+          data-testid="pairing-note"
+          className="text-muted-foreground mt-2 flex items-start gap-1.5 text-xs"
+        >
+          <Link2 className="mt-0.5 size-3 shrink-0" />
+          <span>
+            已把 <span className="text-foreground">{entry.paired.still}</span> 与{' '}
+            <span className="text-foreground">{entry.paired.video}</span> 合成一个 Live Photo
+            {entry.paired.matchedBy === 'identifier'
+              ? '（两者携带相同的配对标识）'
+              : '（按文件名配对，未能确认标识）'}
+            。
+          </span>
+        </p>
+      )}
 
       {/* An unidentifiable file gets an explanation, not an empty picker. */}
       {entry.profile?.mediaClass === 'unknown' && (

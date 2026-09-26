@@ -3,6 +3,8 @@ import { MediaEngineClient, asEngineError } from '../engines/client.ts';
 import type { ConvertOutcome } from '../engines/client.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
 import { FORMATS } from '../core/registry/formats.ts';
+import { pairLivePhotos, type PairingCandidate } from '../livephoto/detect.ts';
+import { buildLivp } from '../livephoto/pack.ts';
 import { planFor, type ResolvedPlan } from '../core/routing/resolve.ts';
 import type { FormatId } from '../core/types.ts';
 
@@ -20,6 +22,13 @@ export interface FileEntry {
   error?: string;
   /** Set once the user has acknowledged a critical loss for this file. */
   acknowledged?: boolean;
+  /**
+   * Set when this entry was assembled from two dropped files.
+   *
+   * The pairing resolution matters to show: matching on Apple's identifier is evidence,
+   * matching on the filename is a guess, and the user deserves to know which one they got.
+   */
+  paired?: { still: string; video: string; matchedBy: 'identifier' | 'filename' };
 }
 
 interface State {
@@ -184,6 +193,8 @@ export const useStore = create<State>((set, get) => {
           }
         }),
       );
+
+      await pairDroppedFiles(set, get);
     },
 
     removeFile(id) {
@@ -245,6 +256,83 @@ export const useStore = create<State>((set, get) => {
     },
   };
 });
+
+/**
+ * Look for Live Photo pairs among the entries and merge each pair into one.
+ *
+ * A Live Photo arrives from most tools as two loose files, and showing them as two
+ * unrelated entries invites the user to convert each half separately — which is exactly
+ * what they did not mean.
+ *
+ * Rather than teach every downstream layer about pairs, a matched pair is assembled into
+ * a `.livp` in memory and treated as one input. The pipeline already understands that
+ * shape, so nothing below this line has to change.
+ */
+async function pairDroppedFiles(
+  set: (fn: (s: State) => Partial<State>) => void,
+  get: () => State,
+): Promise<void> {
+  const entries = get().files.filter((f) => f.profile && !f.paired && f.status === 'ready');
+
+  const candidates: PairingCandidate[] = entries.map((e) => ({
+    name: e.file.name,
+    bytes: new Uint8Array(),
+    container: e.profile!.container,
+    ...(e.profile!.contentId ? { contentId: e.profile!.contentId } : {}),
+  }));
+
+  const groups = pairLivePhotos(candidates);
+  if (groups.length === 0) return;
+
+  for (const group of groups) {
+    const stillEntry = entries[candidates.indexOf(group.still)];
+    const videoEntry = entries[candidates.indexOf(group.video)];
+    if (!stillEntry || !videoEntry) continue;
+
+    try {
+      const still = new Uint8Array(await stillEntry.file.arrayBuffer());
+      const video = new Uint8Array(await videoEntry.file.arrayBuffer());
+      const { bytes } = buildLivp(still, video);
+
+      const id = stillEntry.id;
+      set((s) => ({
+        files: s.files
+          .filter((f) => f.id !== videoEntry.id)
+          .map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  file: new File([bytes as BlobPart], `${baseNameOf(stillEntry.file.name)}.livp`),
+                  profile: {
+                    name: `${baseNameOf(stillEntry.file.name)}.livp`,
+                    size: bytes.length,
+                    container: 'zip' as const,
+                    mediaClass: 'live-photo' as const,
+                    livePhotoFlavor: 'apple-paired' as const,
+                    videoTracks: [],
+                    audioTracks: [],
+                    otherTrackCount: 0,
+                  },
+                  target: f.target ?? 'mp4',
+                  paired: {
+                    still: stillEntry.file.name,
+                    video: videoEntry.file.name,
+                    matchedBy: group.matchedBy,
+                  },
+                }
+              : f,
+          ),
+      }));
+    } catch {
+      // If the two will not zip together, leave them as separate entries rather than
+      // dropping them — the user can still convert each half on its own.
+    }
+  }
+}
+
+function baseNameOf(name: string): string {
+  return name.replace(/\.[^./\\]+$/, '') || 'live';
+}
 
 /**
  * A sensible default target, or `null` when nothing is feasible.

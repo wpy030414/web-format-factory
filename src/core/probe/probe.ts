@@ -2,6 +2,7 @@ import { ALL_FORMATS, BlobSource, Input, type InputTrack } from 'mediabunny';
 
 import type { ContainerId } from '../types.ts';
 import { detectMotionPhoto, unpackLivp } from '../../livephoto/detect.ts';
+import { extractXmp } from '../../livephoto/xmp.ts';
 import { classify } from './classify.ts';
 import type { AudioTrackInfo, MediaProfile, VideoTrackInfo } from './profile.ts';
 import {
@@ -86,6 +87,21 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
     }
   }
 
+  // A JPEG can still be the still half of an Apple pair, carrying the shared identifier
+  // in its XMP. Without reading it here, pairing would fall back to filenames for the
+  // very format both halves were designed to be matched by.
+  if (sniffed.container === 'jpeg') {
+    const stillId = readStillIdentifier(head);
+    if (stillId) {
+      return {
+        ...base,
+        mediaClass: 'still-image',
+        hasAlpha: false,
+        contentId: stillId,
+      };
+    }
+  }
+
   // Images carry their own metadata rather than a track structure.
   if (
     sniffed.container === 'png' ||
@@ -120,6 +136,11 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
     const audio = await Promise.all(audioTracks.map(readAudioTrack));
     const duration = await input.computeDuration().catch(() => undefined);
 
+    // Apple tags the video half of a Live Photo with an identifier. Reading it here costs
+    // one metadata lookup on files we are already parsing, and it is what lets us pair a
+    // dropped still with its video on evidence rather than on a filename guess.
+    const contentId = await readContentIdentifierFrom(input);
+
     const mediaClass = classify({
       container: sniffed.container,
       hasVideoTrack: video.length > 0,
@@ -131,6 +152,7 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
       mediaClass,
       videoTracks: video,
       audioTracks: audio,
+      ...(contentId ? { contentId } : {}),
       otherTrackCount: Math.max(0, allTracks.length - video.length - audio.length),
       ...(duration !== undefined && Number.isFinite(duration) ? { durationSec: duration } : {}),
       ...(mediaClass === 'unknown'
@@ -181,6 +203,33 @@ async function detectAnimation(
   }
 
   return false;
+}
+
+/**
+ * Apple's pairing identifier on a still image.
+ *
+ * Written into the XMP packet, under the `apple` namespace. A still that carries it and a
+ * MOV that carries the same value are a pair on evidence rather than on a name.
+ */
+function readStillIdentifier(head: Uint8Array): string | undefined {
+  const xmp = extractXmp(head);
+  if (!xmp) return undefined;
+  const match = xmp.match(/apple:ContentIdentifier\s*=\s*"([^"]+)"/);
+  return match?.[1];
+}
+
+/** Apple's pairing identifier, if this file carries one. */
+async function readContentIdentifierFrom(input: Input): Promise<string | undefined> {
+  try {
+    const tags = await input.getMetadataTags();
+    const value = tags.raw?.['com.apple.quicktime.content.identifier'];
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+    return undefined;
+  } catch {
+    // No metadata, or nothing readable — either way there is no identifier.
+    return undefined;
+  }
 }
 
 async function readVideoTrack(track: InputTrack): Promise<VideoTrackInfo> {

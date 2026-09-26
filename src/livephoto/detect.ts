@@ -1,5 +1,4 @@
 import { unzipSync } from 'fflate';
-import { ALL_FORMATS, BlobSource, Input } from 'mediabunny';
 
 import { sniff } from '../core/probe/sniff.ts';
 import type { ContainerId } from '../core/types.ts';
@@ -11,6 +10,11 @@ import { extractXmp, readContainerMotionPhotoLength, readXmpNumber } from './xmp
  * The awkward part of this format is that it is not one format: Apple pairs a still with
  * a MOV and shares an identifier, Google appends a video to a still inside a single file,
  * and `.livp` is just a ZIP of the Apple pair. Each is detected differently.
+ *
+ * Everything here works on bytes alone and imports no media library, so the pairing
+ * helpers are safe to use from the UI — pulling the parser into the entry chunk just to
+ * zip two halves together would be a poor trade. Reading the identifier *out of* a MOV
+ * does need the library, and lives in the probe instead.
  */
 
 export type LivePhotoFlavor =
@@ -138,31 +142,6 @@ export function unpackLivp(bytes: Uint8Array): LivePhotoInfo | null {
   }
 
   return { flavor: 'apple-livp', still, video, issues };
-}
-
-/* -------------------------------------------------------- Apple: reading the identifier */
-
-/**
- * Read the Apple pairing identifier from a MOV's metadata.
- *
- * Returns `undefined` for anything that is not a tagged QuickTime file, which is the
- * normal case for an ordinary video.
- */
-export async function readContentIdentifier(blob: Blob): Promise<string | undefined> {
-  try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
-    const tags = await input.getMetadataTags();
-    const raw = tags.raw;
-    if (!raw) return undefined;
-
-    const value = raw['com.apple.quicktime.content.identifier'];
-    if (typeof value === 'string') return value;
-    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
-    return undefined;
-  } catch {
-    // Not a parseable media file, or no metadata — either way, no identifier.
-    return undefined;
-  }
 }
 
 /**
