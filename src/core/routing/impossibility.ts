@@ -17,81 +17,79 @@ export interface ImpossibilityCopy {
 }
 
 /**
- * Copy for every way a conversion can be unavailable.
+ * User-facing copy for every way a conversion can be unavailable.
+ *
+ * The strings are Chinese because the interface is; the code around them stays English.
  *
  * The guiding rule: a disabled control must explain *why*, and whenever a different
- * target would work, the UI offers that target as a button — the alternatives are
- * rendered as controls, never folded into the prose.
+ * target would work, the UI offers that target as a button — alternatives are rendered
+ * as controls, never folded into the prose.
  *
  * Where nothing can be done, we say so without hedging. Audio genuinely has no visual
  * component, and inventing one would be creation, not conversion.
  */
 export const IMPOSSIBILITY_COPY: Record<ImpossibilityReason, ImpossibilityCopy> = {
   'class-mismatch': {
-    title: 'Not applicable to this file',
-    body: () => 'This conversion does not apply to the kind of file you dropped in.',
+    title: '不适用于这个文件',
+    body: () => '这个转换不适用于你拖入的文件类型。',
   },
 
   'needs-visual-component': {
-    title: 'Audio has no pictures',
+    title: '音频没有画面',
     body: () =>
-      'A video needs a picture track, and audio does not contain one. Producing a video ' +
-      'here would mean inventing visuals — that is authoring, not converting. ' +
-      'Try an audio format instead.',
+      '视频需要一条画面轨道，而音频里并不包含画面。在这里生成视频意味着凭空发明画面——' +
+      '那是创作，不是转换。可以改选一种音频格式。',
   },
 
   'needs-motion-component': {
-    title: 'A still image has no motion',
+    title: '静态图没有运动',
     body: () =>
-      'A Live Photo is defined as a still plus a short video. A single image cannot supply ' +
-      'the video half. Drop the matching video alongside the image and we can pair them.',
+      'Live Photo 的定义是「一张静图 + 一段短片」。单张图片无法提供视频的那一半。' +
+      '把配对的那段视频一起拖进来，我们就可以把它们组回一个 Live Photo。',
   },
 
   'needs-multiple-frames': {
-    title: 'A single frame is not an animation',
+    title: '单帧不构成动画',
     body: () =>
-      'An animated format needs a sequence of frames. One still image cannot be stretched ' +
-      'into motion without inventing the missing frames. Try a still image format instead.',
+      '动图格式需要一串连续的帧。单张静图无法被拉伸成运动，除非凭空补出缺失的帧。' +
+      '可以改选一种静图格式。',
   },
 
   'livephoto-needs-video': {
-    title: 'Live Photo needs a video too',
+    title: 'Live Photo 还需要一段视频',
     body: () =>
-      'A Live Photo pairs a still image with a short video that share an identifier. ' +
-      'A still image on its own has no video half to pair with.',
+      'Live Photo 由一张静图和一段共享标识的短片配对而成。只有静图时，没有视频的那一半可以配对。',
   },
 
   'no-encoder-in-browser': {
-    title: 'This browser cannot encode that format',
+    title: '这个浏览器无法编码该格式',
     body: (i) =>
-      `Your browser has no encoder for ${i.detail ?? 'the selected format'}. ` +
-      'This is a limitation of the browser, not a problem with your file.',
+      `你的浏览器没有 ${i.detail ?? '所选格式'} 的编码器。这是浏览器的限制，` +
+      '不是文件本身的问题。',
   },
 
   'no-decoder-in-browser': {
-    title: 'This file cannot be decoded here',
+    title: '这个文件无法在此解码',
     body: (i) =>
-      `Your browser cannot decode ${i.detail ?? 'this file'}. ` +
-      'Try a different browser, or convert it with a desktop tool first.',
+      `你的浏览器无法解码 ${i.detail ?? '这个文件'}。可以换一个浏览器，` +
+      '或先用桌面工具转换一次。',
   },
 
   'container-cannot-hold-codec': {
-    title: 'That container cannot hold this codec',
+    title: '这个容器装不下该编码',
     body: (i) =>
-      `${i.detail ?? 'The selected codec'} cannot be stored in the chosen container. ` +
-      'Pick a different codec or a different container.',
+      `${i.detail ?? '所选编码'} 无法存入所选容器。请换一种编码，或换一个容器。`,
   },
 
   'param-unsupported': {
-    title: 'That setting is not available for this target',
-    body: (i) => `${i.detail ?? 'The requested setting'} cannot be honoured by this format.`,
+    title: '该目标格式不支持这个设置',
+    body: (i) => `${i.detail ?? '所请求的设置'} 无法被这个格式满足。`,
   },
 
   'engine-unavailable': {
-    title: 'Required engine unavailable',
+    title: '所需引擎不可用',
     body: (i) =>
-      `${i.detail ?? 'An engine this conversion needs'} could not be loaded. ` +
-      'This usually means the page is not cross-origin isolated, which the fallback ' +
-      'engine requires.',
+      `${i.detail ?? '这个转换所需的引擎'} 无法加载。通常是因为页面没有开启跨源隔离，` +
+      '而兜底引擎需要它。',
   },
 };

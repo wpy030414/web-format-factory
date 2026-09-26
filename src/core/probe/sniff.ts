@@ -180,3 +180,91 @@ export function isApng(bytes: Uint8Array): boolean {
   }
   return false;
 }
+
+/** Does a RIFF WebP carry an `ANIM` chunk, making it animated? */
+export function isAnimatedWebp(bytes: Uint8Array): boolean {
+  if (!startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) || ascii(bytes, 8, 4) !== 'WEBP') return false;
+  // Chunks start at 12: [fourcc:4][size:4][payload]. The size is little-endian and
+  // padded to an even boundary.
+  let off = 12;
+  while (off + 8 <= bytes.length) {
+    const type = ascii(bytes, off, 4);
+    const size =
+      (bytes[off + 4]! | (bytes[off + 5]! << 8) | (bytes[off + 6]! << 16) | (bytes[off + 7]! << 24)) >>>
+      0;
+    if (type === 'ANIM') return true;
+    if (type === 'ANMF') return true; // an animation frame implies animation
+    if (type === 'VP8 ' || type === 'VP8L' || type === 'VP8X') {
+      // These can precede ANIM in the extended format, so keep walking.
+    }
+    off += 8 + size + (size % 2);
+    if (size > bytes.length) break; // malformed; stop rather than loop forever
+  }
+  return false;
+}
+
+/**
+ * Count the frames in a GIF.
+ *
+ * A GIF is a block stream, so this walks it properly rather than scanning for byte
+ * values — `0x2C` and `0x21` occur constantly inside compressed image data, and a naive
+ * count would report almost any GIF as animated.
+ */
+export function countGifFrames(bytes: Uint8Array): number {
+  if (!startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) return 0;
+
+  let off = 6;
+  if (off + 7 > bytes.length) return 0;
+
+  const packed = bytes[off + 4]!;
+  off += 7; // logical screen descriptor
+
+  const hasGlobalTable = (packed & 0x80) !== 0;
+  if (hasGlobalTable) off += 3 * (1 << ((packed & 0x07) + 1));
+
+  let frames = 0;
+
+  // Skip a chain of sub-blocks: [size:1][data:size]…, terminated by a zero size.
+  const skipSubBlocks = (start: number): number => {
+    let p = start;
+    while (p < bytes.length) {
+      const size = bytes[p]!;
+      p += 1 + size;
+      if (size === 0) break;
+    }
+    return p;
+  };
+
+  while (off < bytes.length) {
+    const introducer = bytes[off]!;
+
+    if (introducer === 0x3b) break; // trailer
+
+    if (introducer === 0x21) {
+      // Extension: [0x21][label][sub-blocks…]
+      off = skipSubBlocks(off + 2);
+      continue;
+    }
+
+    if (introducer === 0x2c) {
+      frames += 1;
+      if (off + 10 > bytes.length) break;
+      const localPacked = bytes[off + 9]!;
+      let p = off + 10;
+      if ((localPacked & 0x80) !== 0) p += 3 * (1 << ((localPacked & 0x07) + 1)); // local table
+      p += 1; // LZW minimum code size
+      off = skipSubBlocks(p);
+      continue;
+    }
+
+    // Unknown introducer: the stream is malformed. Stop rather than guess.
+    break;
+  }
+
+  return frames;
+}
+
+/** Is this GIF more than a single frame? */
+export function isAnimatedGif(bytes: Uint8Array): boolean {
+  return countGifFrames(bytes) > 1;
+}

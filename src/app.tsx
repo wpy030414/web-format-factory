@@ -1,137 +1,120 @@
-import { useMemo, useState } from 'react';
-import { Check, Lock, ArrowRightLeft, ShieldCheck } from 'lucide-react';
-import { cn } from '@/lib/utils.ts';
-import { ALL_FORMAT_IDS, FORMATS } from '@/core/registry/formats.ts';
-import { verdictFor } from '@/core/routing/transitions.ts';
-import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
-import type { FormatId, MediaClass } from '@/core/types.ts';
-
-/** Source classes a person can actually drop in. `unknown` is a runtime outcome, not a pick. */
-const SOURCE_CLASSES: ReadonlyArray<{ id: MediaClass; label: string; hint: string }> = [
-  { id: 'video', label: 'Video', hint: 'MP4, MOV, MKV, WebM' },
-  { id: 'animated-image', label: 'Animated image', hint: 'GIF, animated WebP, APNG' },
-  { id: 'still-image', label: 'Still image', hint: 'JPEG, PNG, WebP, HEIC' },
-  { id: 'audio', label: 'Audio', hint: 'MP3, M4A, FLAC, WAV, OGG, AAC' },
-  { id: 'live-photo', label: 'Live Photo', hint: 'Apple or Google' },
-];
+import { useCallback } from 'react';
+import { Play, Download, Trash2, Loader2, ShieldCheck } from 'lucide-react';
+import { useStore } from '@/state/store.ts';
+import { Dropzone } from '@/ui/dropzone.tsx';
+import { FileCard } from '@/ui/file-card.tsx';
 
 export function App() {
-  const [source, setSource] = useState<MediaClass>('video');
+  const files = useStore((s) => s.files);
+  const running = useStore((s) => s.running);
+  const addFiles = useStore((s) => s.addFiles);
+  const startAll = useStore((s) => s.startAll);
+  const downloadAll = useStore((s) => s.downloadAll);
+  const clearFinished = useStore((s) => s.clearFinished);
 
-  const rows = useMemo(
-    () =>
-      ALL_FORMAT_IDS.map((target) => ({
-        target,
-        spec: FORMATS[target],
-        verdict: verdictFor(source, target),
-      })),
-    [source],
+  const onFiles = useCallback(
+    (incoming: File[]) => {
+      void addFiles(incoming);
+    },
+    [addFiles],
   );
 
-  const reachable = rows.filter((r) => r.verdict.kind !== 'impossible').length;
+  const readyCount = files.filter(
+    (f) =>
+      f.profile &&
+      f.target &&
+      f.status !== 'done' &&
+      f.status !== 'running' &&
+      f.status !== 'queued',
+  ).length;
+  const doneCount = files.filter((f) => f.status === 'done').length;
+  const blocked = files.filter(
+    (f) => f.status === 'ready' && f.profile && (!f.target || f.profile.mediaClass === 'unknown'),
+  ).length;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <header className="mb-8">
+    <div className="mx-auto max-w-3xl px-5 py-10">
+      <header className="mb-7">
         <h1 className="text-2xl font-semibold tracking-tight">Web Format Factory</h1>
-        <p className="text-muted-foreground mt-2 max-w-2xl text-sm leading-relaxed">
-          Every conversion happens on this device. Files are never uploaded anywhere.
-          Below is the full conversion matrix — including the conversions this tool
-          deliberately refuses to perform, and why.
+        <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+          影像与音频的格式互转，全部在这台设备上完成。
+          <span className="text-foreground"> 转换前会告诉你代价</span>
+          ——会丢什么、会不会重新压缩、哪些格式做不到以及为什么。
         </p>
       </header>
 
-      <section className="mb-6">
-        <div className="mb-3 flex items-center gap-2">
-          <ArrowRightLeft className="text-muted-foreground size-4" />
-          <span className="text-sm font-medium">What are you converting from?</span>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {SOURCE_CLASSES.map((c) => (
+      <Dropzone onFiles={onFiles} compact={files.length > 0} />
+
+      {files.length > 0 && (
+        <>
+          <div className="border-border mt-6 flex flex-wrap items-center gap-2 border-y py-3">
             <button
-              key={c.id}
               type="button"
-              onClick={() => setSource(c.id)}
-              aria-pressed={source === c.id}
-              className={cn(
-                'rounded-lg border px-3 py-2 text-left transition-colors',
-                source === c.id
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'hover:bg-accent border-border',
-              )}
+              onClick={startAll}
+              disabled={readyCount === 0 || running > 0}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-40"
             >
-              <div className="text-sm font-medium">{c.label}</div>
-              <div
-                className={cn(
-                  'text-xs',
-                  source === c.id ? 'text-primary-foreground/70' : 'text-muted-foreground',
-                )}
-              >
-                {c.hint}
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs">
-        <ShieldCheck className="size-3.5" />
-        <span>
-          {reachable} of {rows.length} targets are reachable from {labelOf(source)}
-        </span>
-      </div>
-
-      <ul className="grid gap-2 sm:grid-cols-2">
-        {rows.map(({ target, spec, verdict }) => (
-          <li
-            key={target}
-            className={cn(
-              'rounded-lg border p-3',
-              verdict.kind === 'impossible' ? 'border-border/60 opacity-60' : 'border-border',
-            )}
-          >
-            <div className="flex items-center gap-2">
-              {verdict.kind === 'impossible' ? (
-                <Lock className="text-muted-foreground size-4 shrink-0" />
+              {running > 0 ? (
+                <Loader2 className="size-3.5 animate-spin" />
               ) : (
-                <Check className="text-fidelity-lossless size-4 shrink-0" />
+                <Play className="size-3.5" />
               )}
-              <span className="text-sm font-medium">{spec.label}</span>
-              <span className="text-muted-foreground ml-auto font-mono text-xs">
-                .{spec.extension}
+              {running > 0 ? `转换中（${running}）` : `开始转换（${readyCount}）`}
+            </button>
+
+            <button
+              type="button"
+              onClick={downloadAll}
+              disabled={doneCount === 0}
+              className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:opacity-40"
+            >
+              <Download className="size-3.5" />
+              全部下载（{doneCount}）
+            </button>
+
+            <button
+              type="button"
+              onClick={clearFinished}
+              disabled={doneCount === 0}
+              className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm disabled:opacity-40"
+            >
+              <Trash2 className="size-3.5" />
+              清除已完成
+            </button>
+
+            {blocked > 0 && (
+              <span className="text-muted-foreground ml-auto text-xs">
+                {blocked} 个文件没有可选的目标格式
               </span>
-            </div>
-
-            {verdict.kind === 'project' && (
-              <p className="text-muted-foreground mt-1.5 text-xs">
-                Needs a projection step ({verdict.projector})
-              </p>
             )}
+          </div>
 
-            {verdict.kind === 'impossible' && (
-              <p className="text-muted-foreground mt-1.5 text-xs leading-relaxed">
-                <span className="text-foreground font-medium">
-                  {IMPOSSIBILITY_COPY[verdict.reason].title}.
-                </span>{' '}
-                {IMPOSSIBILITY_COPY[verdict.reason].body({
-                  reason: verdict.reason,
-                  alternatives: [],
-                })}
-              </p>
-            )}
+          <ul className="mt-4 space-y-3">
+            {files.map((entry) => (
+              <FileCard key={entry.id} entry={entry} />
+            ))}
+          </ul>
+        </>
+      )}
 
-            {spec.note && verdict.kind !== 'impossible' && (
-              <p className="text-muted-foreground mt-1.5 text-xs">{spec.note}</p>
-            )}
-          </li>
-        ))}
-      </ul>
+      {files.length === 0 && (
+        <section className="mt-10">
+          <h2 className="mb-2 text-sm font-medium">这个工具不会替你做的事</h2>
+          <ul className="text-muted-foreground space-y-1.5 text-xs leading-relaxed">
+            <li>· 不会把音频变成视频——那需要凭空发明画面，那是创作，不是转换。</li>
+            <li>· 不会把一张静图拉成动图或视频——缺少的帧不会凭空出现。</li>
+            <li>· 不会缩放分辨率、裁剪画面、调整帧率——那些是编辑，不是转换。</li>
+          </ul>
+          <p className="text-muted-foreground mt-3 text-xs">
+            帮你做这些决定很容易，但那样你拿到的就不是你以为的东西了。
+          </p>
+        </section>
+      )}
+
+      <footer className="text-muted-foreground border-border mt-10 flex items-center gap-1.5 border-t pt-5 text-xs">
+        <ShieldCheck className="size-3.5 shrink-0" />
+        没有上传，没有服务器，没有账户。关掉页面，一切就消失了。
+      </footer>
     </div>
   );
 }
-
-function labelOf(cls: MediaClass): string {
-  return SOURCE_CLASSES.find((c) => c.id === cls)?.label.toLowerCase() ?? cls;
-}
-
-export type { FormatId };
