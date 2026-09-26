@@ -64,6 +64,8 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 可用界面：拖拽 → 识别 → 选目标 → 代价清单 → 转换 → 下载
 - 诊断页 `#/capabilities`：实测本机的跨源隔离、编解码器可用性、原生 HEIC 支持，
   并翻译成「这对应用意味着什么」
+
+![能力诊断页](docs/screenshot-capabilities.png)
 - 部署配置样例：`deploy/nginx.conf.sample` 与 `deploy/Caddyfile.sample`
 - 测试：单元与集成 161 项，Playwright 端到端 36 项，产物一律交给 ffprobe 校验
 
