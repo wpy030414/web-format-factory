@@ -21,6 +21,7 @@ import type { FormatId } from '../../core/types.ts';
 import {
   EngineError,
   outputNameFor,
+  qualityFraction,
   type Engine,
   type EngineRequest,
   type EngineResult,
@@ -246,7 +247,7 @@ async function framesToVideo(
   // throws `config.quality must be provided` without one.
   const source = new CanvasSource(canvas, {
     codec: codec as never,
-    quality: new Quality(qualityPercent(params.quality)),
+    quality: new Quality(qualityFraction(params.quality, 0.85)),
   });
   const target = new BufferTarget();
   const output = new Output({ format: makeFormat(), target });
@@ -487,11 +488,6 @@ async function isGif(blob: Blob): Promise<boolean> {
  * been through one lossy pass, and stacking a second aggressive compression on top of it
  * is how GIF → video ends up looking worse than the GIF.
  */
-function qualityPercent(value: unknown): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) return 85;
-  return Math.min(100, Math.max(0, value));
-}
-
 function tooManyFrames(count: number): EngineError {
   return new EngineError(
     `这段内容有 ${count} 帧，超过 ${MAX_FRAMES} 帧的上限。GIF 编码需要在内存里保留每一帧，` +

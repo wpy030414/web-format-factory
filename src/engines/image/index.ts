@@ -5,6 +5,7 @@ import { decodeHeic } from './heic.ts';
 import {
   EngineError,
   outputNameFor,
+  qualityFraction,
   type Engine,
   type EngineRequest,
   type EngineResult,
@@ -73,7 +74,7 @@ export class ImageEngine implements Engine {
     const bitmap = await decode(input);
 
     try {
-      const quality = normalizeQuality(params.quality);
+      const quality = qualityFraction(params.quality, 0.9);
       const output = await encode(bitmap, spec, quality);
       const targetSpec = getFormat(target);
 
@@ -145,10 +146,4 @@ async function encode(bitmap: ImageBitmap, spec: ImageTarget, quality: number): 
       'encode-failed',
     );
   }
-}
-
-/** Our parameters are 0–100; the canvas API wants 0–1. */
-function normalizeQuality(value: unknown): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) return 0.9;
-  return Math.min(1, Math.max(0, value / 100));
 }

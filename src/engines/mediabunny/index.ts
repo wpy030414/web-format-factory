@@ -34,6 +34,7 @@ import { primeAudioEncoder } from './extensions.ts';
 import {
   EngineError,
   outputNameFor,
+  qualityFraction,
   type Engine,
   type EngineRequest,
   type EngineResult,
@@ -161,9 +162,13 @@ function trackOptionsFor(
   }
 
   if (typeof chosen.quality === 'number') {
-    // Quality applies to whichever track the target has.
-    if (spec.codecs.video?.length) videoChanges.quality = new Quality(chosen.quality);
-    else if (spec.codecs.audio?.length) audioChanges.quality = new Quality(chosen.quality);
+    // Quality applies to whichever track the target has. The declared parameter runs 0–100
+    // and the encoder's scale is 0–1; passing the percentage straight through made the
+    // derived bitrate astronomically wrong, which the codecs with a quantizer mode hid and
+    // the ones without it refused outright.
+    const quality = new Quality(qualityFraction(chosen.quality, 0.75));
+    if (spec.codecs.video?.length) videoChanges.quality = quality;
+    else if (spec.codecs.audio?.length) audioChanges.quality = quality;
   }
 
   if (typeof chosen.keyFrameInterval === 'number') {

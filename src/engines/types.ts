@@ -79,3 +79,23 @@ export function outputNameFor(inputName: string, extension: string): string {
   const base = inputName.replace(/\.[^./\\]+$/, '') || 'output';
   return `${base}.${extension}`;
 }
+
+/**
+ * Our parameters are 0–100; every encoder underneath wants 0–1.
+ *
+ * One function rather than one per engine, because the per-engine copies had already
+ * drifted: the image engine normalised, and the other two passed the raw percentage
+ * through. That omission was invisible from the outside for a long time — Mediabunny
+ * turns a quality into a *quantizer* where the codec allows one, and clamps anything
+ * outside 0–1 back into range, so VP9 quietly encoded at maximum quality and the slider
+ * was inert. It surfaced only where no quantizer was available: H.264 had to fall back to
+ * the bitrate the bogus scale produces — 0.3·e^(2.5538·75), about 10^86 bits per second —
+ * and the encoder rejected the config outright. Every 动图 → MP4/MOV/MKV was a route that
+ * could only fail, and nothing tested it.
+ *
+ * @param fallback used when the parameter is absent or not a number.
+ */
+export function qualityFraction(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
+  return Math.min(1, Math.max(0, value / 100));
+}
