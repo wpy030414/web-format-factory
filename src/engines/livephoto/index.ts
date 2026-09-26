@@ -10,6 +10,11 @@ import { sniff } from '../../core/probe/sniff.ts';
 import type { FormatId } from '../../core/types.ts';
 import { detectMotionPhoto, unpackLivp, type LivePhotoInfo } from '../../livephoto/detect.ts';
 import { buildLivp, buildMotionPhoto } from '../../livephoto/pack.ts';
+import {
+  readAppleMakerNoteIdentifier,
+  relocateMovieMeta,
+  writeAppleMakerNote,
+} from '../../livephoto/apple.ts';
 import { extractXmp, stripMotionPhotoXmp, writeXmp } from '../../livephoto/xmp.ts';
 import {
   EngineError,
@@ -197,15 +202,38 @@ export class LivePhotoEngine implements Engine {
     onProgress?.({ phase: 'muxing', ratio: undefined, label: '准备 MOV' });
     const movBytes = await this.#videoHalf(existing, input, request, 'mov', signal);
 
-    // 3. The pairing identifier. Both halves must carry the same one or they are not a
-    //    pair at all.
-    const uuid = crypto.randomUUID().toUpperCase();
+    // 3. The pairing identifier. Both halves must carry the same one, and they keep it in
+    //    different places: the still in its maker notes, the movie in QuickTime metadata.
+    //    Photos pairs them only when the two agree — which is why both sides are written
+    //    here, and why the movie's metadata is moved to where Apple's reader looks
+    //    (docs/researches/live-photo-photos-import.md). A still that arrived as part of a
+    //    bundle already carries an identifier of its own; reusing it is more faithful than
+    //    inventing a new one, and does not require rewriting that still's metadata.
+    const existingIdentifier = readAppleMakerNoteIdentifier(still);
+    const uuid = existingIdentifier ?? crypto.randomUUID().toUpperCase();
     onProgress?.({ phase: 'finalizing', ratio: undefined, label: '写入配对标识' });
-    const tagged = await tagAppleIdentifier(movBytes, uuid);
+
+    const taggedMovie = relocateMovieMeta(await tagAppleIdentifier(movBytes, uuid));
+
+    let taggedStill = still;
+    if (existingIdentifier === null) {
+      try {
+        taggedStill = writeAppleMakerNote(still, uuid);
+      } catch {
+        // The still carries EXIF already, and rewriting that EXIF to make room for a
+        // maker note is a job this engine does not do. Reported rather than faked: the
+        // pair is still written, but it will import as two items instead of one.
+        losses.push({
+          code: 'pairing-identifier-not-written',
+          severity: severityOf('pairing-identifier-not-written'),
+          detail: '静态图已带 EXIF，无法在不破坏它的前提下写入 Apple 的配对标识。',
+        });
+      }
+    }
 
     // 4. Package. `.livp` is a ZIP of the two, and it is what Apple's own tooling
     //    recognises when it arrives by AirDrop or from a file.
-    const { bytes } = buildLivp(still, tagged);
+    const { bytes } = buildLivp(taggedStill, taggedMovie);
 
     return {
       output: new Blob([bytes as BlobPart], { type: 'application/zip' }),
@@ -217,14 +245,13 @@ export class LivePhotoEngine implements Engine {
         {
           code: 'still-image-time-track-missing',
           severity: severityOf('still-image-time-track-missing'),
-          // Deliberately says what is missing and stops there. The track's *purpose* is
-          // well documented — it marks where in the video the still sits — but what its
-          // absence actually changes on a device has not been measured, and claiming
-          // either way would be the kind of unfounded assert this project keeps catching
-          // itself making. See docs/DECISIONS.md ADR-009.
+          // Now measured rather than hedged: taking all three of Apple's metadata tracks
+          // out of a working pair left it working, so its absence does not stop Photos
+          // from pairing the halves. It remains a difference from Apple's own output, and
+          // is reported as that. See docs/researches/live-photo-photos-import.md.
           detail:
             '没有写入 Apple 的 still-image-time 轨道：它用来标记静帧落在时间轴上的哪一点。' +
-            '缺少它的实际影响未经实测，所以这里既不宣称无害，也不宣称有害。',
+            '实测它不影响相册是否把两半认成一张实况照片，但仍与 Apple 自身的产物有差异。',
         },
       ],
     };

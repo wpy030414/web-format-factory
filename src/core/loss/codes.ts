@@ -57,11 +57,22 @@ export type LossCode =
   /**
    * Apple's still-image-time track is absent.
    *
-   * It marks where in the video the still sits. What its absence *changes* on a real
-   * device has not been measured — see docs/DECISIONS.md ADR-009 — so the copy says what
-   * is missing rather than what it costs.
+   * It marks where in the video the still sits. Measured on 2026-09-26: its absence
+   * does **not** stop Photos from pairing the two halves — taking all three of
+   * Apple's metadata tracks out of a working pair left it working. See
+   * `docs/researches/live-photo-photos-import.md`. It remains a difference from
+   * their output, so it is reported; it is not why a pair fails to pair.
    */
   | 'still-image-time-track-missing'
+  /**
+   * The pairing identifier is in the movie but not in the still.
+   *
+   * Apple pairs the two halves by an identifier both must carry: the still keeps its copy
+   * in its maker notes, the movie in QuickTime metadata. A still that already carries EXIF
+   * cannot be given one without rewriting that EXIF, so it is carried across as it is —
+   * and the two halves will import as separate items rather than one Live Photo.
+   */
+  | 'pairing-identifier-not-written'
 
   // --- metadata ----------------------------------------------------------
   | 'metadata-exif-dropped'
@@ -111,6 +122,7 @@ const SEVERITY: Record<LossCode, LossSeverity> = {
   'frames-dropped': 'warn',
   'frame-selected': 'warn',
   'still-image-time-track-missing': 'info',
+  'pairing-identifier-not-written': 'warn',
 
   'metadata-exif-dropped': 'warn',
   'metadata-xmp-dropped': 'warn',

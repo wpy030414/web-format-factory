@@ -128,6 +128,7 @@ export const LOSS_COPY: Record<LossItem['code'], string> = {
   'frames-dropped': '部分帧将被丢弃',
   'frame-selected': '将从动态内容中选取一帧',
   'still-image-time-track-missing': '未写入静帧的时间标记轨道',
+  'pairing-identifier-not-written': '静态图已有 EXIF，无法写入配对标识——相册可能认不出这是一张实况照片',
   'metadata-exif-dropped': 'EXIF 信息将丢失',
   'metadata-xmp-dropped': 'XMP 信息将丢失',
   'metadata-icc-dropped': '色彩配置文件将丢失',
