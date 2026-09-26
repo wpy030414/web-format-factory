@@ -73,6 +73,7 @@
 - `docs/ARCHITECTURE.md` — 引擎分层、并发模型、数据流
 - `docs/DECISIONS.md` — 不可逆选择的理由与推翻记录
 - `docs/specs/` — 各模块的详细规格
+- `docs/researches/` — 实测记录：把一个悬而未决的假设钉成事实（或钉成反例）的全过程，含失败的对照与自我更正
 - `src/core/` — 纯逻辑核心：格式注册表、路由、损失标注（应保持可单测、无浏览器依赖）
 - `src/engines/` — 各引擎适配器（按需动态加载）
 - `src/ui/` — React 组件

@@ -115,4 +115,4 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 | 兜底引擎 | ffmpeg.wasm（懒加载） |
 
 **详细文档见 `docs/`**：产品语义边界见 `docs/PRD.md`，引擎分层见 `docs/ARCHITECTURE.md`，
-关键取舍的理由见 `docs/DECISIONS.md`。
+关键取舍的理由见 `docs/DECISIONS.md`，真机实测的全过程见 `docs/researches/`。
