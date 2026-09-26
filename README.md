@@ -59,13 +59,13 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
   导出静图时会剥掉已经失效的 Motion Photo 声明
 - 兜底引擎（ffmpeg.wasm）：按需加载、跨源隔离检测、WORKERFS 挂载，用于动态 WebP 编码
   与 Live Photo 的配对标识写入
+- 编码参数界面：由各格式自己声明的参数表渲染，改设置会改变代价判定，并真的传到编码器
 - 转换 Worker 与调度，主线程不卡
 - 可用界面：拖拽 → 识别 → 选目标 → 代价清单 → 转换 → 下载
-- 测试：单元与集成 159 项，Playwright 端到端 25 项，产物一律交给 ffprobe 校验
+- 测试：单元与集成 161 项，Playwright 端到端 32 项，产物一律交给 ffprobe 校验
 
 尚未完成：
 
-- 编码参数界面（参数定义与数据流已就绪，缺控件）
 - `/capabilities` 诊断页与部署配置样例（nginx / Caddy 的 COOP/COEP）
 - 编码参数的界面（`params` 目前为默认值）
 - 部署配置与 `/capabilities` 诊断页

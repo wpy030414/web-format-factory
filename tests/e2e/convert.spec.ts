@@ -511,6 +511,53 @@ test.describe('Live Photo', () => {
   });
 });
 
+test.describe('编码参数', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('切换目标会带上该格式的参数，并按声明的默认值播种', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Matroska', exact: true }).click();
+    // Matroska declares a codec choice, so the panel must offer it.
+    await expect(page.getByTestId('param-panel')).toBeVisible();
+    await expect(page.getByTestId('param-codec')).toBeVisible();
+  });
+
+  test('改参数会改变代价判定，而不是事后再补一句说明', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Matroska', exact: true }).click();
+    const plan = page.getByTestId('plan-summary');
+
+    // With no parameters set, the codecs fit and this is a free container change.
+    await expect(plan.getByText('无损', { exact: true })).toBeVisible();
+    await expect(plan.getByText('瞬时（换容器）')).toBeVisible();
+
+    // Choosing a different codec forces a re-encode. The verdict has to follow the
+    // setting that caused it — a summary that still promised "lossless" here would be
+    // telling the user something the conversion is not going to do.
+    await page.getByTestId('param-codec').selectOption('vp9');
+    await expect(plan.getByText('需重新编码')).toBeVisible();
+  });
+
+  test('改参数会真的传到转换里', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Matroska', exact: true }).click();
+    await page.getByTestId('param-codec').selectOption('vp9');
+
+    const saved = await convertAndSave(page, 'Matroska', 'out.mkv');
+    // VP9, not the source's H.264 — proof the setting reached the encoder.
+    expect(ffprobe(saved).codecs).toContain('vp9');
+  });
+});
+
 test.describe('兜底引擎', () => {
   test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
 

@@ -78,11 +78,33 @@ describe('planFor — 诚实性：无损与有损必须由编码决定', () => {
     expect(plan.did).toBe('transmux');
   });
 
-  it('显式请求重新编码会覆盖可复制的判断', () => {
+  it('显式选择的编码会覆盖可复制的判断', () => {
+    // `codec` is a real control on the Matroska target, so choosing VP9 there is a
+    // decision the user can actually make.
+    const plan = planFor(profileWith('video', { video: ['avc'], audio: ['aac'] }), 'mkv', {
+      codec: 'vp9',
+    });
+    expect(plan.did).toBe('transcode');
+  });
+
+  it('停在默认值上的参数不算一次选择', () => {
+    // The panel seeds every control with its declared default, so `codec` is always
+    // *present*. Reading presence as a choice marked every untouched conversion as a
+    // re-encode — turning a free, lossless container change into a generation loss.
+    const defaulted = planFor(profileWith('video', { video: ['avc'], audio: ['aac'] }), 'mkv', {
+      codec: 'avc', // Matroska's declared default
+    });
+    expect(defaulted.did).toBe('transmux');
+    expect(defaulted.fidelity).toBe('lossless');
+  });
+
+  it('目标格式根本不暴露的参数会被忽略，而不是误当成指令', () => {
+    // Matroska has no quality control, so a stray quality value is not something the
+    // user could have meant — it must not silently force a re-encode.
     const plan = planFor(profileWith('video', { video: ['avc'], audio: ['aac'] }), 'mkv', {
       quality: 80,
     });
-    expect(plan.did).toBe('transcode');
+    expect(plan.did).toBe('transmux');
   });
 });
 

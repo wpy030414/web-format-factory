@@ -106,8 +106,8 @@ export interface FormatSpec {
 
 const QUALITY: ParamSpec = {
   id: 'quality',
-  label: 'Quality',
-  help: 'Higher is better looking and larger. Mapped to each codec’s native scale.',
+  label: '质量',
+  help: '越高越清晰，文件也越大。会映射到各编码器自己的质量刻度上。',
   control: 'range',
   min: 0,
   max: 100,
@@ -117,12 +117,12 @@ const QUALITY: ParamSpec = {
 
 const ALPHA: ParamSpec = {
   id: 'alpha',
-  label: 'Keep transparency',
-  help: 'Discarding transparency is irreversible. Only some containers can carry it.',
+  label: '保留透明通道',
+  help: '丢弃透明度不可撤销。只有部分容器支持透明。',
   control: 'enum',
   options: [
-    { value: 'discard', label: 'Discard' },
-    { value: 'keep', label: 'Keep' },
+    { value: 'discard', label: '丢弃' },
+    { value: 'keep', label: '保留' },
   ],
   default: 'discard',
 };
@@ -248,8 +248,8 @@ const gif: FormatSpec = {
     QUALITY,
     {
       id: 'paletteSize',
-      label: 'Palette size',
-      help: 'GIF is limited to 256 colours per frame. Fewer colours means a smaller file.',
+      label: '调色板颜色数',
+      help: 'GIF 每帧最多 256 色。颜色越少，文件越小。',
       control: 'range',
       min: 2,
       max: 256,
@@ -259,13 +259,13 @@ const gif: FormatSpec = {
     },
     {
       id: 'dither',
-      label: 'Dithering',
-      help: 'Temporal dithering prevents colour banding shimmering across frames.',
+      label: '抖动',
+      help: '抖动可以减轻色带，并抑制逐帧闪烁。',
       control: 'enum',
       options: [
-        { value: 'none', label: 'None' },
-        { value: 'ordered', label: 'Ordered (fast)' },
-        { value: 'diffusion', label: 'Error diffusion (best)' },
+        { value: 'none', label: '不抖动' },
+        { value: 'ordered', label: '有序（快）' },
+        { value: 'diffusion', label: '误差扩散（画质最好）' },
       ],
       default: 'diffusion',
       advanced: true,
@@ -277,7 +277,7 @@ const gif: FormatSpec = {
 const LIVE_PARAMS: readonly ParamSpec[] = [
   {
     id: 'quality',
-    label: 'Still quality',
+    label: '静帧质量',
     control: 'range',
     min: 0,
     max: 100,
@@ -311,19 +311,19 @@ const mp4: FormatSpec = {
     QUALITY,
     {
       id: 'codec',
-      label: 'Video codec',
+      label: '视频编码',
       control: 'enum',
       options: [
-        { value: 'avc', label: 'H.264 (most compatible)' },
-        { value: 'hevc', label: 'H.265 (smaller, Apple-only encode)' },
-        { value: 'av1', label: 'AV1 (smallest, limited support)' },
+        { value: 'avc', label: 'H.264（兼容性最好）' },
+        { value: 'hevc', label: 'H.265（更小，但只有 Apple 端能编码）' },
+        { value: 'av1', label: 'AV1（最小，支持面窄）' },
       ],
       default: 'avc',
     },
     {
       id: 'keyFrameInterval',
-      label: 'Keyframe interval (s)',
-      help: 'Forces a re-encode. Shorter intervals seek faster and are larger.',
+      label: '关键帧间隔（秒）',
+      help: '设置它会强制重新编码。间隔越短，拖动定位越快，文件也越大。',
       control: 'range',
       min: 1,
       max: 30,
@@ -333,12 +333,12 @@ const mp4: FormatSpec = {
     },
     {
       id: 'hardwareAcceleration',
-      label: 'Hardware acceleration',
+      label: '硬件加速',
       control: 'enum',
       options: [
-        { value: 'no-preference', label: 'Automatic' },
-        { value: 'prefer-hardware', label: 'Prefer hardware' },
-        { value: 'prefer-software', label: 'Prefer software' },
+        { value: 'no-preference', label: '自动' },
+        { value: 'prefer-hardware', label: '优先硬件' },
+        { value: 'prefer-software', label: '优先软件' },
       ],
       default: 'no-preference',
       advanced: true,
@@ -368,7 +368,7 @@ const mov: FormatSpec = {
   params: [
     {
       id: 'codec',
-      label: 'Video codec',
+      label: '视频编码',
       control: 'enum',
       options: [
         { value: 'avc', label: 'H.264' },
@@ -402,7 +402,7 @@ const mkv: FormatSpec = {
   params: [
     {
       id: 'codec',
-      label: 'Video codec',
+      label: '视频编码',
       control: 'enum',
       options: [
         { value: 'avc', label: 'H.264' },
@@ -437,7 +437,7 @@ const webm: FormatSpec = {
   params: [
     {
       id: 'codec',
-      label: 'Video codec',
+      label: '视频编码',
       control: 'enum',
       options: [
         { value: 'vp9', label: 'VP9' },
@@ -456,7 +456,7 @@ const webm: FormatSpec = {
 const audioCommon: readonly ParamSpec[] = [
   {
     id: 'bitrate',
-    label: 'Bitrate (kbps)',
+    label: '码率（kbps）',
     control: 'range',
     min: 32,
     max: 320,
@@ -466,11 +466,11 @@ const audioCommon: readonly ParamSpec[] = [
   },
   {
     id: 'sampleRate',
-    label: 'Sample rate',
-    help: 'Changing this resamples the audio. Leave as “source” unless you need otherwise.',
+    label: '采样率',
+    help: '改动它会重采样音频。除非确有必要，保持「跟随源」。',
     control: 'enum',
     options: [
-      { value: 'source', label: 'Match source' },
+      { value: 'source', label: '跟随源' },
       { value: '44100', label: '44.1 kHz' },
       { value: '48000', label: '48 kHz' },
     ],
@@ -575,11 +575,11 @@ const wav: FormatSpec = {
   params: [
     {
       id: 'sampleRate',
-      label: 'Sample rate',
-      help: 'Changing this resamples the audio.',
+      label: '采样率',
+      help: '改动它会重采样音频。',
       control: 'enum',
       options: [
-        { value: 'source', label: 'Match source' },
+        { value: 'source', label: '跟随源' },
         { value: '44100', label: '44.1 kHz' },
         { value: '48000', label: '48 kHz' },
       ],
@@ -609,18 +609,18 @@ const ogg: FormatSpec = {
   params: [
     {
       id: 'codec',
-      label: 'Audio codec',
-      help: 'Opus is the better modern choice and is universally supported.',
+      label: '音频编码',
+      help: 'Opus 是更好的现代选择，且支持面很广。',
       control: 'enum',
       options: [
-        { value: 'opus', label: 'Opus (recommended)' },
-        { value: 'vorbis', label: 'Vorbis (legacy — needs the fallback engine)' },
+        { value: 'opus', label: 'Opus（推荐）' },
+        { value: 'vorbis', label: 'Vorbis（旧格式，需要兜底引擎）' },
       ],
       default: 'opus',
     },
     {
       id: 'bitrate',
-      label: 'Bitrate (kbps)',
+      label: '码率（kbps）',
       control: 'range',
       min: 32,
       max: 320,
@@ -675,4 +675,27 @@ export const ALL_FORMAT_IDS = Object.keys(FORMATS) as FormatId[];
 
 export function getFormat(id: FormatId): FormatSpec {
   return FORMATS[id];
+}
+
+/**
+ * The parameters the user actually changed.
+ *
+ * This distinction is load-bearing, not cosmetic. The panel seeds every control with its
+ * declared default, so `codec` is *present* on a conversion nobody has touched — and the
+ * copy-versus-re-encode decision reads a present codec as "the user wants a re-encode".
+ * Without this, every conversion would be planned as a re-encode and a lossless,
+ * instant container change would be reported as neither.
+ *
+ * An untouched default is not a choice.
+ */
+export function changedParams(
+  target: FormatId,
+  values: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const spec of FORMATS[target].params) {
+    const value = values[spec.id];
+    if (value !== undefined && value !== spec.default) changed[spec.id] = value;
+  }
+  return changed;
 }

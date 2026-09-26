@@ -22,6 +22,8 @@ export interface FileEntry {
   error?: string;
   /** Set once the user has acknowledged a critical loss for this file. */
   acknowledged?: boolean;
+  /** Encoding parameters, seeded from the target format's declared defaults. */
+  params?: Record<string, unknown>;
   /**
    * Set when this entry was assembled from two dropped files.
    *
@@ -40,6 +42,7 @@ interface State {
   removeFile: (id: string) => void;
   clearFinished: () => void;
   setTarget: (id: string, target: FormatId) => void;
+  setParam: (id: string, key: string, value: unknown) => void;
   acknowledge: (id: string, value: boolean) => void;
   startAll: () => void;
   cancelAll: () => void;
@@ -93,7 +96,7 @@ export const useStore = create<State>((set, get) => {
         file: entry.file,
         fileName: entry.file.name,
         target: entry.target,
-        params: {},
+        params: entry.params ?? {},
         onProgress: (ratio) =>
           set((s) => ({
             files: s.files.map((f) => (f.id === entry.id ? { ...f, progress: ratio } : f)),
@@ -178,7 +181,7 @@ export const useStore = create<State>((set, get) => {
                       status: 'ready',
                       // Preselect a sensible target, or leave it null when nothing is
                       // feasible so the user sees the refusals rather than a guess.
-                      target: f.target ?? pickDefaultTarget(profile),
+                      ...seedTarget(f, profile),
                     }
                   : f,
               ),
@@ -208,7 +211,26 @@ export const useStore = create<State>((set, get) => {
     },
 
     setTarget(id, target) {
-      set((s) => ({ files: s.files.map((f) => (f.id === id ? { ...f, target } : f)) }));
+      set((s) => ({
+        files: s.files.map((f) => {
+          // Re-picking the target that is already selected is not a change, and wiping
+          // the parameters for it would throw away settings the user just made.
+          if (f.id !== id || f.target === target) return f;
+
+          // Parameters are per-target, so switching target reseeds them from that
+          // format's declared defaults rather than carrying values across that may mean
+          // nothing on the new one. Any acknowledgement belonged to the old target too.
+          return { ...f, target, params: defaultParamsFor(target), acknowledged: false };
+        }),
+      }));
+    },
+
+    setParam(id, key, value) {
+      set((s) => ({
+        files: s.files.map((f) =>
+          f.id === id ? { ...f, params: { ...f.params, [key]: value } } : f,
+        ),
+      }));
     },
 
     acknowledge(id, value) {
@@ -221,7 +243,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({
         files: s.files.map((f) => {
           if (!f.profile || !f.target) return f;
-          const plan = planFor(f.profile, f.target);
+          const plan = planFor(f.profile, f.target, f.params ?? {});
           if (!plan.feasible) return f;
           // A critical loss must be acknowledged before we will start.
           if (plan.needsAcknowledgement && !f.acknowledged) return f;
@@ -246,7 +268,9 @@ export const useStore = create<State>((set, get) => {
     planForFile(id) {
       const entry = get().files.find((f) => f.id === id);
       if (!entry?.profile || !entry.target) return null;
-      return planFor(entry.profile, entry.target);
+      // Parameters change the verdict: asking for a specific codec turns a lossless
+      // container change into a re-encode, and the badges have to say so.
+      return planFor(entry.profile, entry.target, entry.params ?? {});
     },
 
     downloadAll() {
@@ -328,6 +352,28 @@ async function pairDroppedFiles(
       // dropping them — the user can still convert each half on its own.
     }
   }
+}
+
+/**
+ * Give a freshly probed entry a target and the parameters that go with it.
+ *
+ * Both arrive together: parameters only mean anything against a specific target, so
+ * seeding one without the other would leave the panel showing values the format does
+ * not even accept.
+ */
+function seedTarget(entry: FileEntry, profile: MediaProfile): Partial<FileEntry> {
+  const target = entry.target ?? pickDefaultTarget(profile);
+  return {
+    target,
+    params: entry.params ?? (target ? defaultParamsFor(target) : {}),
+  };
+}
+
+/** Seed a parameter set from a format's declared defaults. */
+export function defaultParamsFor(target: FormatId): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const spec of FORMATS[target].params) out[spec.id] = spec.default;
+  return out;
 }
 
 function baseNameOf(name: string): string {

@@ -24,7 +24,7 @@ export function App() {
     (f: (typeof files)[number]): boolean => {
       if (!f.profile || !f.target) return false;
       if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-      const plan = planFor(f.profile, f.target);
+      const plan = planFor(f.profile, f.target, f.params ?? {});
       if (!plan.feasible) return false;
       // A file waiting on acknowledgement is not ready. Counting it as ready would
       // enable a button that then does nothing at all — a silent no-op, which is worse
@@ -42,7 +42,7 @@ export function App() {
   const awaitingAck = files.filter((f) => {
     if (!f.profile || !f.target) return false;
     if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-    const plan = planFor(f.profile, f.target);
+    const plan = planFor(f.profile, f.target, f.params ?? {});
     return plan.feasible && plan.needsAcknowledgement && !f.acknowledged;
   }).length;
   const blocked = files.filter(

@@ -14,6 +14,7 @@ import {
   Mp3OutputFormat,
   MovOutputFormat,
   Mp4OutputFormat,
+  Quality,
   OGG,
   OggOutputFormat,
   Output,
@@ -26,7 +27,7 @@ import {
   type OutputFormat,
 } from 'mediabunny';
 
-import { getFormat } from '../../core/registry/formats.ts';
+import { changedParams, getFormat } from '../../core/registry/formats.ts';
 import { severityOf, type LossItem } from '../../core/loss/codes.ts';
 import type { FormatId } from '../../core/types.ts';
 import {
@@ -93,6 +94,7 @@ export async function planCopy(
   input: Input,
   outputFormat: OutputFormat,
   params: Readonly<Record<string, unknown>> = {},
+  target?: FormatId,
 ): Promise<CopyDecision> {
   const supported = new Set<string>(outputFormat.getSupportedCodecs());
 
@@ -106,17 +108,91 @@ export async function planCopy(
     }
   }
 
-  // An explicit request to re-encode always wins over the automatic choice.
+  // An explicit request to re-encode always wins over the automatic choice — but only a
+  // request that was actually made. The UI seeds every control with its default, so a
+  // present `codec` on an untouched conversion means nothing; treating it as a choice
+  // would re-encode everything and quietly turn a lossless container change into a
+  // generation loss.
+  const chosen = target ? changedParams(target, params) : params;
   const userForced =
-    params.forceTranscode === true ||
-    params.codec !== undefined ||
-    params.quality !== undefined ||
-    params.bitrate !== undefined;
+    chosen.forceTranscode === true ||
+    chosen.codec !== undefined ||
+    chosen.quality !== undefined ||
+    chosen.bitrate !== undefined;
 
   if (userForced || incompatible.length > 0 || tracks.length === 0) {
     return { mode: 'preferred', did: 'transcode', incompatible };
   }
   return { mode: 'forced', did: 'transmux', incompatible };
+}
+
+/**
+ * Build the per-track encode options from the user's parameters.
+ *
+ * Without this the parameters reach the *plan* but never the encoder: `copy: 'preferred'`
+ * means "copy whatever can be copied", so choosing VP9 for a Matroska target would
+ * happily copy the source's H.264 instead and the setting would be silently ignored —
+ * the panel would say one thing and the file another.
+ *
+ * `forceTranscode` is what turns a preference into an instruction. It is applied only
+ * when the user actually changed something: asking for the codec a track already has
+ * should still be allowed to copy it.
+ *
+ * @returns the `video` / `audio` entries for `ConversionOptions`.
+ */
+function trackOptionsFor(
+  target: FormatId,
+  params: Readonly<Record<string, unknown>>,
+): { video?: Record<string, unknown>; audio?: Record<string, unknown> } {
+  const chosen = changedParams(target, params);
+  const spec = getFormat(target);
+
+  const videoChanges: Record<string, unknown> = {};
+  const audioChanges: Record<string, unknown> = {};
+
+  // The same `codec` parameter means a picture codec on some targets and a sound codec
+  // on others, so which track it belongs to is decided by the target's own declaration.
+  if (typeof chosen.codec === 'string') {
+    if ((spec.codecs.video ?? []).includes(chosen.codec as never)) videoChanges.codec = chosen.codec;
+    else if ((spec.codecs.audio ?? []).includes(chosen.codec as never)) {
+      audioChanges.codec = chosen.codec;
+    }
+  }
+
+  if (typeof chosen.quality === 'number') {
+    // Quality applies to whichever track the target has.
+    if (spec.codecs.video?.length) videoChanges.quality = new Quality(chosen.quality);
+    else if (spec.codecs.audio?.length) audioChanges.quality = new Quality(chosen.quality);
+  }
+
+  if (typeof chosen.keyFrameInterval === 'number') {
+    videoChanges.keyFrameInterval = chosen.keyFrameInterval;
+  }
+  if (typeof chosen.hardwareAcceleration === 'string') {
+    videoChanges.hardwareAcceleration = chosen.hardwareAcceleration;
+  }
+  if (chosen.alpha === 'keep' || chosen.alpha === 'discard') {
+    videoChanges.alpha = chosen.alpha;
+  }
+
+  // A request to re-encode has to be *forced*, not merely preferred. `preferred` asks
+  // the library to copy anything copyable, which would defeat an explicit codec choice
+  // whenever the source codec happens to fit the target container.
+  const forced =
+    chosen.forceTranscode === true ||
+    chosen.codec !== undefined ||
+    chosen.quality !== undefined ||
+    chosen.bitrate !== undefined;
+
+  if (forced) {
+    if (Object.keys(videoChanges).length > 0) videoChanges.forceTranscode = true;
+    else if (spec.codecs.video?.length) videoChanges.forceTranscode = true;
+    if (Object.keys(audioChanges).length > 0) audioChanges.forceTranscode = true;
+  }
+
+  const video = Object.keys(videoChanges).length > 0 ? videoChanges : undefined;
+  const audio = Object.keys(audioChanges).length > 0 ? audioChanges : undefined;
+  return { ...(video ? { video } : {}), ...(audio ? { audio } : {}) };
 }
 
 /**
@@ -146,7 +222,7 @@ export class MediabunnyEngine implements Engine {
     let decision: CopyDecision;
     try {
       mediaInput = new Input({ source: new BlobSource(input), formats: INPUT_FORMATS });
-      decision = await planCopy(mediaInput, outputFormat, params);
+      decision = await planCopy(mediaInput, outputFormat, params, target);
     } catch (cause) {
       // A source this engine cannot parse is not a failure — it is the signal for the
       // dispatcher to fall through to the next engine.
@@ -170,6 +246,9 @@ export class MediabunnyEngine implements Engine {
         input: mediaInput,
         output,
         copy: { mode: decision.mode },
+        // The user's settings, translated into per-track encode options. Without these
+        // the parameters change the plan but never the output.
+        ...trackOptionsFor(target, params),
         // Carry the source's metadata across. Dropping it silently would be a content
         // loss the user never agreed to — see docs/DECISIONS.md ADR-003.
         tags: (inputTags) => inputTags,

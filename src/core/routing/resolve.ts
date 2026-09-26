@@ -1,6 +1,6 @@
 import { computeFidelity, computeLosses, requiresAcknowledgement } from '../loss/fidelity.ts';
 import type { LossItem } from '../loss/codes.ts';
-import { getFormat } from '../registry/formats.ts';
+import { changedParams, getFormat } from '../registry/formats.ts';
 import type { MediaProfile } from '../probe/profile.ts';
 import type { ContainerId, Fidelity, FormatId, RouteShape } from '../types.ts';
 import { IMPOSSIBILITY_COPY, type Impossibility } from './impossibility.ts';
@@ -44,11 +44,15 @@ function canCopyPayload(
   const supported = [...(spec.codecs.video ?? []), ...(spec.codecs.audio ?? [])] as string[];
   if (supported.length === 0) return false; // image targets copy via other engines
 
+  // Only what the user actually changed counts. A seeded default is present in the
+  // parameter set but represents no decision, and reading it as one would mark every
+  // untouched conversion as a re-encode.
+  const chosen = changedParams(target, params);
   const userForced =
-    params.forceTranscode === true ||
-    params.codec !== undefined ||
-    params.quality !== undefined ||
-    params.bitrate !== undefined;
+    chosen.forceTranscode === true ||
+    chosen.codec !== undefined ||
+    chosen.quality !== undefined ||
+    chosen.bitrate !== undefined;
   if (userForced) return false;
 
   const sourceCodecs = [

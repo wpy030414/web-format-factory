@@ -19,6 +19,7 @@ import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
 import { triggerDownload, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
 import { DownloadButton, FidelityBadge, LossList, SpeedBadge } from './fidelity-badge.tsx';
+import { ParamPanel } from './param-panel.tsx';
 
 const FAMILY_LABELS: Record<string, string> = {
   image: '图像',
@@ -31,6 +32,7 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   const setTarget = useStore((s) => s.setTarget);
   const removeFile = useStore((s) => s.removeFile);
   const acknowledge = useStore((s) => s.acknowledge);
+  const setParam = useStore((s) => s.setParam);
   const [showImpossible, setShowImpossible] = useState(false);
 
   const plans = useMemo(
@@ -39,7 +41,12 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   );
   const feasible = plans.filter((p) => p.feasible);
   const impossible = plans.filter((p) => !p.feasible);
-  const active = entry.profile && entry.target ? planFor(entry.profile, entry.target) : null;
+  // Parameters are part of the plan, not decoration on top of it: asking for a specific
+  // codec or quality turns a lossless container change into a re-encode, and the verdict
+  // has to move with the settings that caused it.
+  const params = entry.params ?? {};
+  const active =
+    entry.profile && entry.target ? planFor(entry.profile, entry.target, params) : null;
 
   // Several targets usually fail for the same reason — an audio file cannot become a
   // video, a GIF, or a Live Photo, and listing that sentence six times buries the one
@@ -132,6 +139,20 @@ export function FileCard({ entry }: { entry: FileEntry }) {
             onPick={(t) => setTarget(entry.id, t)}
             disabled={busy}
           />
+
+          {/*
+            Parameters come before the verdict. The verdict is a consequence of these
+            settings, so reading it after them is the natural order — and it means the
+            summary is the last thing seen before Convert.
+          */}
+          {entry.target && (
+            <ParamPanel
+              target={entry.target}
+              values={entry.params ?? {}}
+              onChange={(key, value) => setParam(entry.id, key, value)}
+              disabled={busy || entry.status === 'done'}
+            />
+          )}
 
           {active && <PlanSummary plan={active} />}
 
