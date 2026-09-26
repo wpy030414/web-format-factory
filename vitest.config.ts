@@ -13,6 +13,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['tests/unit/**/*.test.ts'],
+    // unit: pure logic. integration: real engines writing real artifacts, with the
+    // output handed to ffprobe to verify it — see tests/integration/engine.test.ts.
+    include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
+    testTimeout: 30_000,
   },
 });
