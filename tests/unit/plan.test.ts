@@ -147,6 +147,18 @@ describe('pickDefaultTarget — 默认动作应当是免费的那个', () => {
     expect(pickDefaultTarget(asMkv)).not.toBe('mkv');
   });
 
+  it('HEIC 默认给 JPEG：手机拍出来的照片得有个地方可去', () => {
+    // HEIC shares its container with MP4, and the comparison that decides "is this the
+    // format we are already in" has to go through the format's declared containers
+    // rather than its id — `'jpeg'` and `'isobmff-heic'` are different vocabularies and
+    // could never be equal.
+    const profile = profileWith('still-image', { container: 'isobmff-heic' });
+    const picked = pickDefaultTarget(profile);
+
+    expect(picked).toBe('jpeg');
+    expect(planFor(profile, picked!).feasible).toBe(true);
+  });
+
   it('没有免费目标时，退回第一个可行的', () => {
     // MP3 frames can only live in an MP3 container among the audio preferences, so
     // every remaining option is a transcode — the default must still be usable.

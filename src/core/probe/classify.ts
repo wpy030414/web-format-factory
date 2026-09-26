@@ -6,6 +6,9 @@ const IMAGE_CONTAINERS: ReadonlySet<ContainerId> = new Set<ContainerId>([
   'png',
   'webp',
   'gif',
+  // HEIC belongs here rather than with the tracked containers despite sharing ISO-BMFF
+  // with MP4: it has a `meta` box, not a track structure, and it is a picture.
+  'isobmff-heic',
 ]);
 
 /**

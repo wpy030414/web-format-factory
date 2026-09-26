@@ -29,6 +29,14 @@ describe('classify — deciding what a file is', () => {
     expect(classify({ container: 'webp', isAnimated: true })).toBe('animated-image');
   });
 
+  it('treats HEIC as a picture, not as a track container', () => {
+    // HEIC shares ISO-BMFF with MP4 but carries a `meta` box rather than tracks. Leaving
+    // it out of the image containers sends it down the "no usable tracks" path to
+    // `unknown`, which hides every target — and HEIC → JPEG is the most valuable
+    // conversion this tool performs, because it is what every recent iPhone writes.
+    expect(classify({ container: 'isobmff-heic' })).toBe('still-image');
+  });
+
   it('lets a confirmed Live Photo outrank its container', () => {
     // A Motion Photo is a JPEG that is also a bundle; the bundle wins.
     expect(classify({ container: 'jpeg', isLivePhoto: true })).toBe('live-photo');

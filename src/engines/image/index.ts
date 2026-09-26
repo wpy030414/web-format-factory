@@ -1,5 +1,7 @@
 import { getFormat } from '../../core/registry/formats.ts';
+import { sniff } from '../../core/probe/sniff.ts';
 import type { FormatId } from '../../core/types.ts';
+import { decodeHeic } from './heic.ts';
 import {
   EngineError,
   outputNameFor,
@@ -12,8 +14,9 @@ import {
  * The still-image engine.
  *
  * Uses only browser primitives — no WASM, no download. This is the fastest path for
- * every raster format the browser can already decode, which today is JPEG, PNG, WebP
- * and (on Safari) HEIC.
+ * every raster format the browser can already decode, which today is JPEG, PNG and WebP
+ * everywhere, plus HEIC on Safari. A HEIC anywhere else is handled by a lazily loaded
+ * decoder; see ./heic.ts.
  */
 
 interface ImageTarget {
@@ -101,12 +104,21 @@ export class ImageEngine implements Engine {
 async function decode(blob: Blob): Promise<ImageBitmap> {
   try {
     return await createImageBitmap(blob, { imageOrientation: 'from-image' });
-  } catch (cause) {
+  } catch (nativeFailure) {
+    // Only Safari decodes HEIC with the built-in path. The container is checked from the
+    // bytes rather than by asking the decoder package, so no HEIC means no 3 MB download.
+    if (await isHeic(blob)) return decodeHeic(blob);
+
     throw new EngineError(
-      `无法解码这张图片：${(cause as Error).message}`,
+      `无法解码这张图片：${(nativeFailure as Error).message}`,
       'decode-failed',
     );
   }
+}
+
+async function isHeic(blob: Blob): Promise<boolean> {
+  const head = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
+  return sniff(head).container === 'isobmff-heic';
 }
 
 async function encode(bitmap: ImageBitmap, spec: ImageTarget, quality: number): Promise<Blob> {

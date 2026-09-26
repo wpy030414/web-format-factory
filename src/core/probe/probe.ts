@@ -6,6 +6,7 @@ import { extractXmp } from '../../livephoto/xmp.ts';
 import { classify } from './classify.ts';
 import type { AudioTrackInfo, MediaProfile, VideoTrackInfo } from './profile.ts';
 import {
+  HEIC_SEQUENCE_BRANDS,
   imageHasAlpha,
   isAnimatedGif,
   isAnimatedWebp,
@@ -102,12 +103,23 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
     }
   }
 
+  // A HEIC *sequence* is not a still with a hidden extra, it is an animation we cannot
+  // take apart — `createImageBitmap` would quietly hand back frame one. Saying so beats
+  // exporting one frame of a short video and calling it a photograph.
+  if (sniffed.container === 'isobmff-heic' && HEIC_SEQUENCE_BRANDS.has(sniffed.brand ?? '')) {
+    return {
+      ...base,
+      unknownReason: '这是一个 HEIF 图像序列，本项目只能处理单帧的 HEIC 图片。',
+    };
+  }
+
   // Images carry their own metadata rather than a track structure.
   if (
     sniffed.container === 'png' ||
     sniffed.container === 'gif' ||
     sniffed.container === 'jpeg' ||
-    sniffed.container === 'webp'
+    sniffed.container === 'webp' ||
+    sniffed.container === 'isobmff-heic'
   ) {
     const isAnimated = await detectAnimation(file, sniffed.container, head);
     return {

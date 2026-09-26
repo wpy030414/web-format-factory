@@ -106,6 +106,28 @@ describe.skipIf(!haveFixtures)('probe — real files', () => {
     it('does not mistake a still PNG for an animation', async () => {
       expect((await profileOf('still.png')).isAnimated).toBe(false);
     });
+
+    it('classifies a HEIC as a still image rather than giving up on it', async () => {
+      const p = await profileOf('still.heic');
+      expect(p.mediaClass).toBe('still-image');
+      expect(p.container).toBe('isobmff-heic');
+      // The card shows this, so it has to be a name a person recognises rather than the
+      // box layout's.
+      expect(describeProfile(p)).toBe('HEIC');
+    });
+
+    it('refuses a HEIF image sequence instead of silently exporting frame one', async () => {
+      // Same container, different meaning: `hevc`/`hevx`/`msf1` brand a sequence, and
+      // every decoder we have would hand back the first frame and say nothing about the
+      // rest. The bytes are the real fixture with only the major brand swapped, so this
+      // tests the branch rather than a mock of it.
+      const sequence = new Uint8Array(readFileSync(join(FIXTURES, 'still.heic')));
+      sequence.set(new TextEncoder().encode('hevx'), 8);
+
+      const p = await probe(new Blob([sequence]), 'sequence.heics');
+      expect(p.mediaClass).toBe('unknown');
+      expect(p.unknownReason).toContain('序列');
+    });
   });
 
   describe('Live Photo material', () => {

@@ -71,6 +71,22 @@ export interface MediaProfile {
   unknownReason?: string;
 }
 
+/**
+ * Readable names for containers that reach the summary line.
+ *
+ * Only the ones that get there: a file with tracks is described by its codecs, so this is
+ * the image and audio-raw cases. Without it a HEIC reads as `isobmff-heic`, which is the
+ * name of a box layout rather than of anything a person recognises.
+ */
+const CONTAINER_LABELS: Partial<Record<ContainerId, string>> = {
+  jpeg: 'JPEG',
+  png: 'PNG',
+  webp: 'WebP',
+  gif: 'GIF',
+  'isobmff-heic': 'HEIC',
+  zip: 'Live Photo 包',
+};
+
 /** Short human-readable summary, for file cards in the UI. */
 export function describeProfile(profile: MediaProfile): string {
   const parts: string[] = [];
@@ -78,7 +94,9 @@ export function describeProfile(profile: MediaProfile): string {
   const a = profile.audioTracks[0];
   if (v) parts.push(`${v.codec.toUpperCase()} ${v.width}×${v.height}`);
   if (a) parts.push(`${a.codec.toUpperCase()} ${a.sampleRate} Hz`);
-  if (!v && !a && profile.container !== 'unknown') parts.push(profile.container);
+  if (!v && !a && profile.container !== 'unknown') {
+    parts.push(CONTAINER_LABELS[profile.container] ?? profile.container);
+  }
   return parts.join(' · ');
 }
 

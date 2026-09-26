@@ -116,6 +116,16 @@ export function sniff(bytes: Uint8Array): SniffResult {
 }
 
 /**
+ * HEIC brands that hold a *sequence* rather than a single picture.
+ *
+ * They share a container with the stills but not a meaning, and nothing here decodes
+ * them — `createImageBitmap` yields the first frame and says nothing about the rest, so
+ * treating one as a still would silently export one frame of an animation. Reported as
+ * unrecognised instead.
+ */
+export const HEIC_SEQUENCE_BRANDS: ReadonlySet<string> = new Set(['hevc', 'hevx', 'msf1']);
+
+/**
  * Map an ISO-BMFF major brand to a container.
  *
  * MP4, MOV, M4A and HEIC are all the same container format — the brand is the only
@@ -311,6 +321,13 @@ export function imageHasAlpha(bytes: Uint8Array, container: ContainerId): boolea
 
     case 'webp':
       return webpHasAlpha(bytes);
+
+    case 'isobmff-heic':
+      // HEIC can carry an alpha auxiliary image, but the flag is not in the `ftyp` or any
+      // other fixed offset — it lives behind a set of `meta` box references that would
+      // mean a real parse. Answered `false` rather than guessed at, which under-reports
+      // rather than raising a warning about transparency that may not exist.
+      return false;
 
     default:
       return false;
