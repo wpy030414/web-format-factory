@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { MediabunnyEngine } from '../engines/mediabunny/index.ts';
 import { ImageEngine } from '../engines/image/index.ts';
+import { AnimationEngine } from '../engines/animation/index.ts';
 import { EngineError, type Engine, type EngineRequest, type JobProgress } from '../engines/types.ts';
 import { probe } from '../core/probe/probe.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
@@ -43,20 +44,37 @@ export type FromWorker =
     }
   | { type: 'error'; jobId: string; message: string; code: string };
 
-const engines: Engine[] = [new ImageEngine(), new MediabunnyEngine()];
+const engines: Engine[] = [new ImageEngine(), new MediabunnyEngine(), new AnimationEngine()];
+
+/** Did this engine simply not recognise the source, rather than genuinely fail? */
+function isUnsupported(error: unknown): boolean {
+  return (error as { code?: string })?.code === 'unsupported';
+}
 
 /**
- * Pick the engine for a target.
+ * Run a job through the tier order.
  *
- * Order is the tier order: the cheapest engine that can do the job wins. Images need
- * no WASM and no media library, so the still-image engine goes first.
+ * Engines are tried cheapest-first, and an engine that cannot *read the source* steps
+ * aside for the next one. That fall-through matters for GIF: Mediabunny claims the video
+ * containers but cannot parse a GIF, and the animation engine behind it can. Any failure
+ * that is not "wrong engine" propagates immediately rather than being retried blind.
  */
-function engineFor(target: FormatId): Engine {
-  const engine = engines.find((e) => e.supports(target));
-  if (!engine) {
-    throw new EngineError(`没有可以输出 ${target} 的引擎`, 'unsupported');
+async function runWithFallback(request: EngineRequest): Promise<Awaited<ReturnType<Engine['run']>>> {
+  let unsupported: unknown;
+
+  for (const engine of engines) {
+    if (!engine.supports(request.target)) continue;
+    try {
+      return await engine.run(request);
+    } catch (error) {
+      if (!isUnsupported(error)) throw error;
+      unsupported = error;
+    }
   }
-  return engine;
+
+  throw unsupported instanceof Error
+    ? unsupported
+    : new EngineError(`没有引擎可以输出 ${request.target}`, 'unsupported');
 }
 
 /** One AbortController per in-flight job, so cancellation is precise. */
@@ -96,7 +114,7 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
   };
 
   try {
-    const result = await engineFor(target).run(request);
+    const result = await runWithFallback(request);
     post({
       type: 'done',
       jobId,

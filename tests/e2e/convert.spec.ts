@@ -328,3 +328,83 @@ test.describe('图像转换', () => {
     await expect(plan.getByText(/透明度将被丢弃/)).toHaveCount(0);
   });
 });
+
+test.describe('动图转换', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('视频 → GIF：产物是一个真正的 GIF', async ({ page }) => {
+    await page.goto('/');
+    // WebM/VP9 rather than H.264: the test browser decodes it without relying on a
+    // licensed codec being present in the build.
+    await dropFile(page, 'av.webm');
+    expect(await waitForClass(page)).toBe('视频');
+
+    await page.getByRole('button', { name: 'GIF', exact: true }).click();
+
+    const convert = page.getByRole('button', { name: /开始转换/ });
+    await expect(convert).toBeEnabled({ timeout: 15_000 });
+    await convert.click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 120_000 });
+    await expect(downloadButton).toHaveText(/\.gif$/);
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.gif');
+    await download.saveAs(saved);
+
+    // The artifact must be a real GIF, not merely a file with the right name.
+    const probe = ffprobe(saved);
+    expect(probe.codecs).toContain('gif');
+  });
+
+  test('GIF → 视频：产物是一个真正的 WebM', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'anim.gif');
+    expect(await waitForClass(page)).toBe('动图');
+
+    await page.getByRole('button', { name: 'WebM', exact: true }).click();
+
+    const convert = page.getByRole('button', { name: /开始转换/ });
+    await expect(convert).toBeEnabled({ timeout: 15_000 });
+    await convert.click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 120_000 });
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.webm');
+    await download.saveAs(saved);
+
+    const probe = ffprobe(saved);
+    expect(probe.formatName).toContain('webm');
+    expect(probe.codecs).toContain('vp9');
+  });
+
+  test('GIF → 静图：取第一帧，并把这次投影如实标出来', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'anim.gif');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'JPEG', exact: true }).click();
+
+    // Taking one frame out of a moving sequence is a projection, and the plan must say
+    // so rather than presenting it as an ordinary format change.
+    const plan = page.getByTestId('plan-summary');
+    await expect(plan.getByText('投影')).toBeVisible();
+    await expect(plan.getByText(/将从动态内容中选取一帧/)).toBeVisible();
+
+    const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
+    expect(ffprobe(saved).codecs).toContain('mjpeg');
+  });
+});

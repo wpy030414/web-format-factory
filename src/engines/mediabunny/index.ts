@@ -140,10 +140,26 @@ export class MediabunnyEngine implements Engine {
     const makeWriter = WRITERS[target];
     if (!makeWriter) throw new EngineError(`no writer for ${target}`, 'unsupported');
 
-    const mediaInput = new Input({ source: new BlobSource(input), formats: INPUT_FORMATS });
     const outputFormat = makeWriter();
 
-    const decision = await planCopy(mediaInput, outputFormat, params);
+    let mediaInput: Input;
+    let decision: CopyDecision;
+    try {
+      mediaInput = new Input({ source: new BlobSource(input), formats: INPUT_FORMATS });
+      decision = await planCopy(mediaInput, outputFormat, params);
+    } catch (cause) {
+      // A source this engine cannot parse is not a failure — it is the signal for the
+      // dispatcher to fall through to the next engine.
+      //
+      // The library throws its own error type here, with no `unsupported` marker of its
+      // own, so without this translation the fall-through never fires. That is exactly
+      // how GIF → video broke: Mediabunny claims the video containers, could not read
+      // the GIF, and the animation engine behind it was never consulted.
+      throw new EngineError(
+        `无法解析这个来源：${(cause as Error).message}`,
+        'unsupported',
+      );
+    }
 
     const target0 = new BufferTarget();
     const output = new Output({ format: outputFormat, target: target0 });
