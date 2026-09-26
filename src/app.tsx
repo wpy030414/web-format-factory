@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Play, Download, Trash2, Loader2 } from 'lucide-react';
+import { Play, Download, Trash2, Loader2, FolderOpen, FolderX, Database } from 'lucide-react';
 import { isActionable, isAwaitingAck, isBlocked, useStore } from '@/state/store.ts';
+import { canSaveToFolder } from '@/lib/save.ts';
 import { BatchCard } from '@/ui/batch-card.tsx';
 import { Dropzone } from '@/ui/dropzone.tsx';
 import { FileCard } from '@/ui/file-card.tsx';
@@ -59,12 +60,21 @@ function Converter() {
 
   const batch = useStore((s) => s.batch);
   const setBatch = useStore((s) => s.setBatch);
+  const drainMode = useStore((s) => s.drainMode);
+  const pickDrainFolder = useStore((s) => s.pickDrainFolder);
+  const clearDrainFolder = useStore((s) => s.clearDrainFolder);
+  const enableIdbDrain = useStore((s) => s.enableIdbDrain);
 
   // The counts come from the store's own predicates — the very ones `startAll` queues
   // with — so the button can never promise work the loop then skips. A count that
   // overstates is a silent no-op, which is worse than a disabled button.
   const readyCount = files.filter((f) => isActionable(f, caps, batch)).length;
   const doneCount = files.filter((f) => f.status === 'done').length;
+  // Folder mode: files land directly on disk, nothing to download.
+  const hasDownloadable =
+    drainMode === 'folder'
+      ? 0
+      : files.filter((f) => f.status === 'done' && f.result?.blob).length;
   // Kept separate so the UI can explain the wait instead of just refusing.
   const awaitingAck = files.filter((f) => isAwaitingAck(f, caps, batch)).length;
   const blocked = files.filter((f) => isBlocked(f, batch)).length;
@@ -101,6 +111,45 @@ function Converter() {
       {files.length > 0 && (
         <>
           <div className="mt-6 flex flex-wrap items-center gap-2 py-3">
+            {/* 保存目录：FSAA 可用时显示，让大文件量场景产物直接落地 */}
+            {canSaveToFolder() && files.some((f) => f.status === 'ready') && drainMode !== 'folder' && (
+              <button
+                type="button"
+                onClick={() => void pickDrainFolder()}
+                className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm"
+              >
+                <FolderOpen className="size-3.5" />
+                选择保存目录
+              </button>
+            )}
+            {/* IDB 暂存：不支持 FSAA 时手动启用，产物写入临时数据库 */}
+            {!canSaveToFolder() && files.some((f) => f.status === 'ready') && drainMode === 'none' && (
+              <button
+                type="button"
+                onClick={() => void enableIdbDrain()}
+                className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm"
+              >
+                <Database className="size-3.5" />
+                启用本地暂存
+              </button>
+            )}
+            {drainMode === 'folder' && (
+              <>
+                <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
+                  <FolderOpen className="size-3" />
+                  已选保存目录
+                </span>
+                <button
+                  type="button"
+                  onClick={clearDrainFolder}
+                  className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
+                >
+                  <FolderX className="size-3" />
+                  取消
+                </button>
+              </>
+            )}
+
             <button
               type="button"
               onClick={startAll}
@@ -115,15 +164,22 @@ function Converter() {
               {running > 0 ? `转换中（${running}）` : `开始转换（${readyCount}）`}
             </button>
 
-            <button
-              type="button"
-              onClick={downloadAll}
-              disabled={doneCount === 0}
-              className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:opacity-40"
-            >
-              <Download className="size-3.5" />
-              全部下载（{doneCount}）
-            </button>
+            {drainMode === 'folder' ? (
+              <span className="text-muted-foreground inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm">
+                <FolderOpen className="size-3.5" />
+                已保存（{doneCount}）
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={downloadAll}
+                disabled={hasDownloadable === 0}
+                className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm disabled:opacity-40"
+              >
+                <Download className="size-3.5" />
+                全部下载（{hasDownloadable}）
+              </button>
+            )}
 
             <button
               type="button"
@@ -134,6 +190,13 @@ function Converter() {
               <Trash2 className="size-3.5" />
               清除已完成
             </button>
+
+            {drainMode === 'idb' && doneCount > 0 && (
+              <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+                <Database className="size-3" />
+                产物暂存在本地，刷新页面后清空
+              </span>
+            )}
 
             {awaitingAck > 0 && (
               <span className="text-muted-foreground text-xs">
@@ -152,7 +215,7 @@ function Converter() {
               are <li> elements, and a section among them would be invalid markup. */}
           {batch.enabled && <BatchCard />}
 
-          <ul className="mt-4 space-y-3">
+          <ul className="mt-4 max-h-[70vh] space-y-3 overflow-y-auto">
             {files.map((entry) => (
               <FileCard key={entry.id} entry={entry} />
             ))}

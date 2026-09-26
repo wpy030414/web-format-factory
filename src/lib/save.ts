@@ -31,9 +31,28 @@ interface DirectoryHandleLike {
   }>;
 }
 
+export type { DirectoryHandleLike };
+
 /** Whether this browser can write straight into a folder the user picks. */
 export function canSaveToFolder(): boolean {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
+}
+
+/**
+ * Write a single blob into a directory the user has already picked.
+ *
+ * Used both in the batch `saveFiles` loop and for streaming individual results into a
+ * pre-chosen folder one at a time as they finish, without keeping them all in memory.
+ */
+export async function writeOneToFolder(
+  handle: DirectoryHandleLike,
+  blob: Blob,
+  name: string,
+): Promise<void> {
+  const fileHandle = await handle.getFileHandle(name, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
 }
 
 /** `anim.jpg` + `anim.mov` → `anim.zip`. */
@@ -105,10 +124,7 @@ export async function saveFiles(
       }).showDirectoryPicker;
       const directory = await picker.call(window, { mode: 'readwrite' });
       for (const file of unique) {
-        const handle = await directory.getFileHandle(file.name, { create: true });
-        const writable = await handle.createWritable();
-        await writable.write(file.blob);
-        await writable.close();
+        await writeOneToFolder(directory, file.blob, file.name);
       }
       return 'saved';
     } catch (cause) {

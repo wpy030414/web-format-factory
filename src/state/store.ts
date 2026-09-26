@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import { MediaEngineClient, asEngineError } from '../engines/client.ts';
-import { saveFiles } from '../lib/save.ts';
+import { saveFiles, canSaveToFolder, writeOneToFolder } from '../lib/save.ts';
 import { triggerDownload } from '../lib/download.ts';
+import {
+  openStore as openIdbStore,
+  putResult as putIdbResult,
+  putCompanion as putIdbCompanion,
+  getResult as getIdbResult,
+} from '../lib/idb-store.ts';
+import type { DirectoryHandleLike } from '../lib/save.ts';
 import type { ConvertOutcome } from '../engines/client.ts';
 import type { JobProgress } from '../engines/types.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
@@ -15,6 +22,9 @@ import { WASM_ENCODED_CODECS } from '../core/codecs.ts';
 import type { CodecId, FormatId } from '../core/types.ts';
 
 export type FileStatus = 'probing' | 'ready' | 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+
+/** How the app lands finished results to free memory. */
+export type DrainMode = 'none' | 'folder' | 'idb';
 
 export interface FileEntry {
   id: string;
@@ -37,6 +47,10 @@ export interface FileEntry {
     /** A second file that belongs with the first: Apple's Live Photo is a pair. */
     companion?: { blob: Blob; name: string; size: number };
   };
+  /** Set once the result blob has been released — written to disk or IDB — and is no
+   *  longer held in memory.  The name and size stay so the card can still show what
+   *  was produced. */
+  drained?: boolean;
   error?: string;
   /** Set once the user has acknowledged a critical loss for this file. */
   acknowledged?: boolean;
@@ -172,39 +186,32 @@ interface State {
   files: FileEntry[];
   running: number;
   engine: MediaEngineClient | null;
-  /**
-   * What this machine can run.
-   *
-   * Held here rather than read inside the planner so the answer is one value that every
-   * part of the UI agrees on — the picker, the Convert button and the diagnostic page all
-   * have to say the same thing about what is available.
-   */
   caps: RouteCapabilities;
-
-  /**
-   * The batch's shared conversion configuration.
-   *
-   * Held on the store rather than distributed onto each entry, which is exactly what makes
-   * the switch non-destructive: turning batch mode off leaves every file's own target and
-   * parameters untouched, and turning it back on finds the shared ones where they were.
-   */
   batch: BatchChoice;
 
   /**
-   * Measure what this machine can encode — the one capability that has to be probed
-   * rather than read — and fold the answer into `caps`.
+   * How finished results leave memory.
    *
-   * Called once, from the converter's first render.
+   * `'none'` — blobs stay in the store (traditional behaviour).
+   * `'folder'` — each result is written straight into a directory the user picked
+   *   and its blob is released immediately afterwards.
+   * `'idb'` — each result is stored in a per-session IndexedDB database, whose blob
+   *   is released from memory; the result can be retrieved for download later in
+   *   the same page load (the DB is nuked on refresh).
    */
+  drainMode: DrainMode;
+  /** Folder handle, set when the user picks a save directory via FSAA. */
+  drainHandle: DirectoryHandleLike | null;
+  /** IndexedDB connection, lazily opened when drainMode switches to 'idb'. */
+  idbDb: IDBDatabase | null;
+
   measureCapabilities: () => void;
   addFiles: (files: File[]) => Promise<void>;
   removeFile: (id: string) => void;
   clearFinished: () => void;
   setTarget: (id: string, target: FormatId) => void;
   setParam: (id: string, key: string, value: unknown) => void;
-  /** Turn batch mode on or off. The per-file choices survive either way. */
   setBatch: (enabled: boolean) => void;
-  /** The one target the whole batch shares while batch mode is on. */
   setBatchTarget: (target: FormatId) => void;
   setBatchParam: (key: string, value: unknown) => void;
   acknowledge: (id: string, value: boolean) => void;
@@ -212,10 +219,16 @@ interface State {
   cancelAll: () => void;
   planForFile: (id: string) => ResolvedPlan | null;
   downloadAll: () => void;
-  /** Join two loose halves into one Live Photo, on the user's say-so. */
   pairManually: (stillId: string, videoId: string) => Promise<void>;
-  /** Take a Live Photo back apart into the two files it was made from. */
   unpair: (id: string) => Promise<void>;
+  /** Let the user pick a folder to receive results as they finish. */
+  pickDrainFolder: () => Promise<void>;
+  /** Stop writing to the folder and leave future results in memory. */
+  clearDrainFolder: () => void;
+  /** Explicitly enable IndexedDB drain mode (for browsers without FSAA). */
+  enableIdbDrain: () => void;
+  /** Download a single drained (FSAA or IDB) result. */
+  downloadDrained: (id: string) => Promise<void>;
 }
 
 /**
@@ -340,6 +353,18 @@ export const useStore = create<State>((set, get) => {
             : f,
         ),
       }));
+
+      // Land the result to free memory if a drain mode is active.  This runs after
+      // the store update so the card renders "done" first — landing is invisible
+      // and the user sees the finished state before the blob is released.
+      void landResult(entry.id, {
+        blob: outcome.output,
+        name: outcome.outputName,
+        size: outcome.output.size,
+        ...(outcome.companion
+          ? { companion: outcome.companion }
+          : {}),
+      });
     } catch (cause) {
       const { message } = asEngineError(cause);
       set((s) => ({
@@ -422,12 +447,103 @@ export const useStore = create<State>((set, get) => {
     );
   };
 
+  /**
+   * Release the result blob for one entry, keeping the name and size so the card can
+   * still show what was produced. Callers have already landed the blob elsewhere.
+   */
+  const evictResult = (id: string): void => {
+    set((s) => ({
+      files: s.files.map((f) =>
+        f.id === id && f.result
+          ? {
+              ...f,
+              drained: true,
+              result: {
+                name: f.result.name,
+                size: f.result.size,
+                blob: undefined as unknown as Blob,
+                // Keep the companion's name and size so the card can still show "两个文件"
+                // rather than pretending the second half never existed.
+                ...(f.result.companion
+                  ? {
+                      companion: {
+                        blob: undefined as unknown as Blob,
+                        name: f.result.companion.name,
+                        size: f.result.companion.size,
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : f,
+      ),
+    }));
+  };
+
+  /** Make sure the IDB connection is open (lazy). */
+  const ensureIdb = async (): Promise<IDBDatabase> => {
+    const existing = get().idbDb;
+    if (existing) return existing;
+    const db = await openIdbStore();
+    set({ idbDb: db });
+    return db;
+  };
+
+  /**
+   * Write a finished result out of memory.
+   *
+   * In folder mode the blob goes to the user's chosen directory. In IDB mode it goes to
+   * the per-session IndexedDB. On failure the blob stays in the entry — it is the only
+   * copy and dropping it would be data loss.
+   */
+  const landResult = async (id: string, outcome: {
+    blob: Blob;
+    name: string;
+    size: number;
+    companion?: { blob: Blob; name: string };
+  }): Promise<void> => {
+    const mode = get().drainMode;
+    if (mode === 'none') return;
+
+    if (mode === 'folder') {
+      const handle = get().drainHandle;
+      if (!handle) return;
+      try {
+        await writeOneToFolder(handle, outcome.blob, outcome.name);
+        if (outcome.companion) {
+          await writeOneToFolder(handle, outcome.companion.blob, outcome.companion.name);
+        }
+      } catch {
+        // Write failed — keep the blob in memory rather than losing it.
+        return;
+      }
+      evictResult(id);
+      return;
+    }
+
+    if (mode === 'idb') {
+      try {
+        const db = await ensureIdb();
+        await putIdbResult(db, id, outcome.blob, outcome.name, outcome.size);
+        if (outcome.companion) {
+          await putIdbCompanion(db, id, outcome.companion.blob, outcome.companion.name);
+        }
+      } catch {
+        return;
+      }
+      evictResult(id);
+    }
+  };
+
   return {
     files: [],
     running: 0,
     engine: null,
     caps: readRouteCapabilities(),
     batch: NO_BATCH,
+    drainMode: 'none',
+    drainHandle: null,
+    idbDb: null,
 
     measureCapabilities() {
       void probeEncoders().then(({ video, audio }) => {
@@ -593,20 +709,85 @@ export const useStore = create<State>((set, get) => {
     },
 
     downloadAll() {
-      // One call for the whole batch — never one per result.
-      //
-      // Every browser allows the first `<a download>` from a gesture and throttles the
-      // rest, silently, with the page unable to tell that it happened. Saving ten results
-      // in a loop is therefore indistinguishable from saving one: the user gets the first
-      // file and no hint about the other nine. They go into a single folder or a single
-      // archive instead, which is also why the names are de-duplicated — a container holds
-      // one file per name, and two jobs can easily produce the same one.
-      const files = get()
-        .files.filter((f) => f.status === 'done' && f.result)
-        .flatMap((f) => resultFiles(f.result!));
-      if (files.length === 0) return;
+      // In folder mode the files are already on disk — nothing to download.
+      const state = get();
+      if (state.drainMode === 'folder') return;
 
-      void saveFiles(files, { archiveName: 'Web Format Factory.zip' });
+      // Collect whatever blobs are still in memory, plus those in IDB.
+      const memFiles = state.files
+        .filter((f) => f.status === 'done' && f.result?.blob)
+        .flatMap((f) => resultFiles({ blob: f.result!.blob!, name: f.result!.name, companion: f.result!.companion ? { blob: f.result!.companion.blob!, name: f.result!.companion.name } : undefined }));
+
+      // For IDB mode, also collect drained entries — we read them back on demand.
+      if (state.drainMode === 'idb' && state.idbDb) {
+        const drainedIds = state.files
+          .filter((f) => f.status === 'done' && f.drained && !f.result?.blob)
+          .map((f) => f.id);
+        if (drainedIds.length > 0) {
+          void (async () => {
+            const db = state.idbDb!;
+            const allFiles: { blob: Blob; name: string }[] = [];
+            for (const id of drainedIds) {
+              const record = await getIdbResult(db, id);
+              if (record) allFiles.push(record);
+            }
+            // Merge with in-memory files, deduplicate by name
+            const combined = [...memFiles, ...allFiles];
+            if (combined.length === 0) return;
+            void saveFiles(combined, { archiveName: 'Web Format Factory.zip' });
+          })();
+          return;
+        }
+      }
+
+      if (memFiles.length === 0) return;
+      void saveFiles(memFiles, { archiveName: 'Web Format Factory.zip' });
+    },
+
+    async pickDrainFolder() {
+      if (!canSaveToFolder()) return;
+      try {
+        const picker = (window as unknown as {
+          showDirectoryPicker(options: { mode: string }): Promise<DirectoryHandleLike>;
+        }).showDirectoryPicker;
+        const handle = await picker.call(window, { mode: 'readwrite' });
+        set({ drainHandle: handle, drainMode: 'folder' });
+      } catch (cause) {
+        // User cancelled — leave drainMode as 'none'.
+        if ((cause as { name?: string })?.name === 'AbortError') return;
+      }
+    },
+
+    clearDrainFolder() {
+      set({ drainHandle: null, drainMode: 'none' });
+    },
+
+    async enableIdbDrain() {
+      const db = await ensureIdb();
+      set({ drainMode: 'idb', idbDb: db });
+    },
+
+    async downloadDrained(id) {
+      const entry = get().files.find((f) => f.id === id);
+      if (!entry?.drained || !entry.result) return;
+
+      const mode = get().drainMode;
+      if (mode === 'folder') {
+        // Already on disk — nothing to do.
+        return;
+      }
+
+      if (mode === 'idb') {
+        const db = get().idbDb;
+        if (!db) return;
+        const record = await getIdbResult(db, id);
+        if (!record) return;
+        // Also fetch companion if present
+        const companion = await getIdbResult(db, `${id}/companion`);
+        const files = [{ blob: record.blob, name: record.name }];
+        if (companion) files.push({ blob: companion.blob, name: companion.name });
+        void saveFiles(files);
+      }
     },
   };
 });

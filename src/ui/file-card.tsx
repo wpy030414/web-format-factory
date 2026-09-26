@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, memo } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -72,16 +72,18 @@ export function progressCaption(progress: JobProgress | undefined, copying: bool
   return `${PHASE_LABELS[progress.phase]}…`;
 }
 
-export function FileCard({ entry }: { entry: FileEntry }) {
+export const FileCard = memo(function FileCard({ entry }: { entry: FileEntry }) {
   const setTarget = useStore((s) => s.setTarget);
   const removeFile = useStore((s) => s.removeFile);
   const acknowledge = useStore((s) => s.acknowledge);
   const setParam = useStore((s) => s.setParam);
   const unpair = useStore((s) => s.unpair);
   const pairManually = useStore((s) => s.pairManually);
+  const downloadDrained = useStore((s) => s.downloadDrained);
   const allFiles = useStore((s) => s.files);
   const caps = useStore((s) => s.caps);
   const batch = useStore((s) => s.batch);
+  const drainMode = useStore((s) => s.drainMode);
   const [showImpossible, setShowImpossible] = useState(false);
 
   const plans = useMemo(
@@ -356,10 +358,10 @@ export function FileCard({ entry }: { entry: FileEntry }) {
         </>
       )}
 
-      <StatusLine entry={entry} copying={active?.did === 'transmux'} />
+      <StatusLine entry={entry} copying={active?.did === 'transmux'} drainMode={drainMode} downloadDrained={downloadDrained} />
     </li>
   );
-}
+});
 
 function PlanSummary({ plan }: { plan: ReturnType<typeof planFor> }) {
   if (!plan.feasible) return null;
@@ -379,7 +381,17 @@ function PlanSummary({ plan }: { plan: ReturnType<typeof planFor> }) {
   );
 }
 
-function StatusLine({ entry, copying }: { entry: FileEntry; copying: boolean }) {
+function StatusLine({
+  entry,
+  copying,
+  drainMode,
+  downloadDrained,
+}: {
+  entry: FileEntry;
+  copying: boolean;
+  drainMode: string;
+  downloadDrained: (id: string) => Promise<void>;
+}) {
   if (entry.status === 'running') {
     const pct =
       entry.progress?.ratio === undefined ? null : Math.round(entry.progress.ratio * 100);
@@ -413,6 +425,39 @@ function StatusLine({ entry, copying }: { entry: FileEntry; copying: boolean }) 
   }
 
   if (entry.status === 'done' && entry.result) {
+    // Drained results: blob is released, card shows a lighter state.
+    if (entry.drained && !entry.result.blob) {
+      if (drainMode === 'folder') {
+        return (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
+              <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
+            </span>
+            <span className="text-muted-foreground text-xs">已保存至目录</span>
+          </div>
+        );
+      }
+      // IDB mode: blob is in IndexedDB, can be downloaded.
+      return (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
+            <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
+          </span>
+          <DownloadButton
+            onClick={() => void downloadDrained(entry.id)}
+            name={
+              entry.result.companion
+                ? canSaveToFolder()
+                  ? '两个文件'
+                  : '两个文件（zip）'
+                : entry.result.name
+            }
+          />
+          <span className="text-muted-foreground text-xs">已暂存</span>
+        </div>
+      );
+    }
+
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
