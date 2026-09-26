@@ -374,6 +374,44 @@ export const useStore = create<State>((set, get) => {
     }
   };
 
+  /**
+   * Throw the worker away once it has served enough jobs, so its memory goes back.
+   *
+   * WebKit will not reclaim a live worker's garbage — dropping the last reference frees
+   * nothing — so a batch that never restarts its worker grows the tab's footprint by tens of
+   * megabytes per file until the browser kills the page and reloads it, taking the user's
+   * whole file list with it. Terminating the worker does give all of it back, and the next
+   * worker reuses it. Measured three ways in docs/researches/webkit-gif-batch-memory.md.
+   *
+   * Ten is a compromise, not a measured optimum: rebuilding re-imports the engine modules
+   * and, if the fallback engine has been used, re-initialises its 31 MB core.
+   */
+  const RECYCLE_AFTER_JOBS = 10;
+
+  /** Jobs served by the worker currently in `engine`. */
+  let jobsThisWorker = 0;
+
+  /** Probes in flight — a recycle must not pull the worker out from under one. */
+  let probesInFlight = 0;
+
+  /**
+   * A recycle came due and the queue is holding still for it.
+   *
+   * The naive version of this — check `running === 0` after each job — never fires during a
+   * batch: two slots and a queue that always has work means `running` goes 2 → 1 → 2 and
+   * never touches zero until the last file. So the recycle has to *make* its own gap: stop
+   * feeding the queue, wait for the other slot to finish, swap the worker, resume. The cost
+   * is a pause of one job's length every `RECYCLE_AFTER_JOBS` files, which is the price of
+   * getting the memory back at all.
+   */
+  let recycleDue = false;
+
+  /** Note that the worker has served its quota. The swap itself happens in `pump()`. */
+  const noteJobServed = (): void => {
+    jobsThisWorker += 1;
+    if (jobsThisWorker >= RECYCLE_AFTER_JOBS) recycleDue = true;
+  };
+
   /** Pull work from the queue while there is capacity. */
   const pump = () => {
     // Fill every free slot, not just one. A `pump()` that starts a job and returns does not
@@ -383,6 +421,19 @@ export const useStore = create<State>((set, get) => {
     for (;;) {
       const state = get();
       if (state.running >= MAX_CONCURRENT) return;
+
+      if (recycleDue) {
+        // Still busy, or a probe is mid-flight: hold the queue rather than kill work.
+        if (state.running > 0 || probesInFlight > 0) return;
+        recycleDue = false;
+        jobsThisWorker = 0;
+        const stale = state.engine;
+        if (stale) {
+          stale.dispose();
+          set({ engine: null });
+        }
+        // Fall through: the next job starts a fresh worker.
+      }
 
       const next = state.files.find((f) => f.status === 'queued');
       if (!next) return;
@@ -394,6 +445,7 @@ export const useStore = create<State>((set, get) => {
 
       void runOne(next).finally(() => {
         set((s) => ({ running: Math.max(0, s.running - 1) }));
+        noteJobServed();
         pump();
       });
     }
@@ -408,6 +460,7 @@ export const useStore = create<State>((set, get) => {
     const client = engine();
     await Promise.all(
       entries.map(async (entry) => {
+        probesInFlight += 1;
         try {
           const inputFile = entry.file as File;
           const profile = await client.probe(inputFile, inputFile.name);
@@ -440,6 +493,8 @@ export const useStore = create<State>((set, get) => {
               f.id === entry.id ? { ...f, status: 'error', error: message } : f,
             ),
           }));
+        } finally {
+          probesInFlight -= 1;
         }
       }),
     );
@@ -685,6 +740,9 @@ export const useStore = create<State>((set, get) => {
     cancelAll() {
       const state = get();
       state.engine?.dispose();
+      // The next job starts a fresh worker, so its job count starts from zero too.
+      jobsThisWorker = 0;
+      recycleDue = false;
       set((s) => ({
         engine: null,
         running: 0,
