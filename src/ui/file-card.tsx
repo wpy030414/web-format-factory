@@ -136,7 +136,10 @@ export const FileCard = memo(function FileCard({ entry }: { entry: FileEntry }) 
   );
 
   return (
-    <li className="border-border bg-card rounded-xl border p-4">
+    <li
+      className="border-border bg-card rounded-xl border p-4"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}
+    >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -425,13 +428,18 @@ function StatusLine({
   }
 
   if (entry.status === 'done' && entry.result) {
-    // Drained results: blob is released, card shows a lighter state.
-    if (entry.drained && !entry.result.blob) {
+    const primary = entry.result.outputs[0];
+    const totalSize = entry.result.outputs.reduce((s, o) => s + o.size, 0);
+    const multi = entry.result.outputs.length > 1;
+    const hasBlobs = entry.result.outputs.some((o) => o.blob);
+
+    // Drained results: blobs are released, card shows a lighter state.
+    if (entry.drained && !hasBlobs) {
       if (drainMode === 'folder') {
         return (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
-              <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
+              <CircleCheck className="size-3" /> 完成 · {formatSize(totalSize)}
             </span>
             <span className="text-muted-foreground text-xs">已保存至目录</span>
           </div>
@@ -441,16 +449,16 @@ function StatusLine({
       return (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
-            <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
+            <CircleCheck className="size-3" /> 完成 · {formatSize(totalSize)}
           </span>
           <DownloadButton
             onClick={() => void downloadDrained(entry.id)}
             name={
-              entry.result.companion
+              multi
                 ? canSaveToFolder()
-                  ? '两个文件'
-                  : '两个文件（zip）'
-                : entry.result.name
+                  ? `${entry.result.outputs.length} 个文件`
+                  : `${entry.result.outputs.length} 个文件（zip）`
+                : primary!.name
             }
           />
           <span className="text-muted-foreground text-xs">已暂存</span>
@@ -461,19 +469,19 @@ function StatusLine({
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <span className="text-fidelity-lossless inline-flex items-center gap-1 text-xs">
-          <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
+          <CircleCheck className="size-3" /> 完成 · {formatSize(totalSize)}
         </span>
         <DownloadButton
           onClick={() => void saveFiles(resultFiles(entry.result!))}
-          // Named for what actually lands. With two files it is either a folder the user
-          // picks or a `.zip` — and never "点击两次各下各的", which browsers throttle and
-          // then say nothing about (src/lib/save.ts).
+          // Named for what actually lands. With multiple files it is either a folder the
+          // user picks or a `.zip` — and never "点击两次各下各的", which browsers throttle
+          // and then say nothing about (src/lib/save.ts).
           name={
-            entry.result.companion
+            multi
               ? canSaveToFolder()
-                ? '两个文件'
-                : '两个文件（zip）'
-              : entry.result.name
+                ? `${entry.result.outputs.length} 个文件`
+                : `${entry.result.outputs.length} 个文件（zip）`
+              : primary!.name
           }
         />
         {canShareFiles(resultFiles(entry.result)) && (

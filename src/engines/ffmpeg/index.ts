@@ -164,8 +164,12 @@ export class FfmpegEngine implements Engine {
       }
 
       return {
-        output: new Blob([data as BlobPart], { type: getFormat(target).mime }),
-        outputName: outputNameFor(request.inputName, getFormat(target).extension),
+        outputs: [
+          {
+            blob: new Blob([data as BlobPart], { type: getFormat(target).mime }),
+            name: outputNameFor(request.inputName, getFormat(target).extension),
+          },
+        ],
         engineId: this.id,
         did: 'transcode',
       };

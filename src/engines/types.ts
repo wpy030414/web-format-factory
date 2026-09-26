@@ -42,18 +42,18 @@ export interface EngineRequest {
 }
 
 export interface EngineResult {
-  output: Blob;
-  outputName: string;
   /**
-   * A second file that only makes sense alongside the first.
+   * Every file the engine produced.
    *
-   * Lives here for one concrete case: Apple's Live Photo is two files — a still and a
-   * short video — and Photos takes them as a pair. Zipping them into `.livp` makes one
-   * file out of something the library refuses to take back
-   * (docs/researches/live-photo-photos-import.md §2), so the user can ask for both halves
-   * loose, and both have to be saved.
+   * Almost every conversion produces exactly one entry. Two common exceptions:
+   *
+   *   1. The Apple Live Photo path, which returns a still image and a short movie as a pair
+   *      that belong together.
+   *   2. The GIF path for videos whose pixel budget exceeds one segment — the engine splits
+   *      the timeline into independently encoded parts so that each stays within a safe
+   *      memory ceiling.
    */
-  companion?: { blob: Blob; name: string };
+  outputs: Array<{ blob: Blob; name: string }>;
   /** The engine that actually did the work — surfaced in the result report. */
   engineId: string;
   /** What it actually did, which may differ from what was requested. */
@@ -86,9 +86,18 @@ export interface Engine {
   run(request: EngineRequest): Promise<EngineResult>;
 }
 
-/** Derive an output file name by swapping the extension. */
-export function outputNameFor(inputName: string, extension: string): string {
+/**
+ * Derive an output file name by swapping the extension.
+ *
+ * When `segmentIndex` is provided (0-based), an `_02` / `_03` suffix is inserted before
+ * the extension. Segment 0 (or undefined) produces no suffix, so the first part of a
+ * multi-file result has the same plain name as a single-file conversion.
+ */
+export function outputNameFor(inputName: string, extension: string, segmentIndex?: number): string {
   const base = inputName.replace(/\.[^./\\]+$/, '') || 'output';
+  if (segmentIndex !== undefined && segmentIndex > 0) {
+    return `${base}_${String(segmentIndex + 1).padStart(2, '0')}.${extension}`;
+  }
   return `${base}.${extension}`;
 }
 

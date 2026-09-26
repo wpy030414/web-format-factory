@@ -135,8 +135,10 @@ export class LivePhotoEngine implements Engine {
       try {
         const result = await candidate.run({ ...request, input: extracted });
         return {
-          ...result,
-          outputName: outputNameFor(request.inputName, spec.extension),
+          outputs: result.outputs.map((o) => ({
+            blob: o.blob,
+            name: outputNameFor(request.inputName, spec.extension),
+          })),
           engineId: this.id,
           // Both halves are carried over byte-for-byte — the split only ever *selects*
           // one of them. Any re-encoding is the delegate's doing, and it reports that
@@ -254,15 +256,20 @@ export class LivePhotoEngine implements Engine {
     //    AirDropped from Photos to an iPhone afterwards. See
     //    docs/researches/live-photo-photos-import.md §7.1.
     const stillIsHeic = sniff(taggedStill.subarray(0, 64)).container === 'isobmff-heic';
+    const stillName = outputNameFor(request.inputName, stillIsHeic ? 'heic' : 'jpg');
     return {
-      output: new Blob([taggedStill as BlobPart], {
-        type: stillIsHeic ? 'image/heic' : 'image/jpeg',
-      }),
-      outputName: outputNameFor(request.inputName, stillIsHeic ? 'heic' : 'jpg'),
-      companion: {
-        blob: new Blob([taggedMovie as BlobPart], { type: 'video/quicktime' }),
-        name: outputNameFor(request.inputName, 'mov'),
-      },
+      outputs: [
+        {
+          blob: new Blob([taggedStill as BlobPart], {
+            type: stillIsHeic ? 'image/heic' : 'image/jpeg',
+          }),
+          name: stillName,
+        },
+        {
+          blob: new Blob([taggedMovie as BlobPart], { type: 'video/quicktime' }),
+          name: outputNameFor(request.inputName, 'mov'),
+        },
+      ],
       engineId: this.id,
       did: 'transcode',
       extraLosses,
@@ -320,8 +327,9 @@ export class LivePhotoEngine implements Engine {
 
     const spec = getFormat('motion-photo');
     return {
-      output: new Blob([bytes as BlobPart], { type: spec.mime }),
-      outputName: outputNameFor(request.inputName, spec.extension),
+      outputs: [
+        { blob: new Blob([bytes as BlobPart], { type: spec.mime }), name: outputNameFor(request.inputName, spec.extension) },
+      ],
       engineId: this.id,
       did: 'transcode',
       ...(losses.length > 0 ? { extraLosses: losses } : {}),
@@ -363,7 +371,7 @@ export class LivePhotoEngine implements Engine {
       detail: '静图是 HEIC，而 Motion Photo 的元数据只能写进 JPEG，因此重新编码了一次。',
     });
 
-    return new Uint8Array(await result.output.arrayBuffer());
+    return new Uint8Array(await result.outputs[0]!.blob.arrayBuffer());
   }
 
   /**
@@ -398,7 +406,7 @@ export class LivePhotoEngine implements Engine {
         target: container,
         ...(signal ? { signal } : {}),
       });
-      return new Uint8Array(await encoded.output.arrayBuffer());
+      return new Uint8Array(await encoded.outputs[0]!.blob.arrayBuffer());
     }
 
     const result = await this.mediabunny.run({
@@ -407,7 +415,7 @@ export class LivePhotoEngine implements Engine {
       target: container,
       ...(signal ? { signal } : {}),
     });
-    return new Uint8Array(await result.output.arrayBuffer());
+    return new Uint8Array(await result.outputs[0]!.blob.arrayBuffer());
   }
 
   /**
@@ -434,7 +442,7 @@ export class LivePhotoEngine implements Engine {
     // it the honest choice — and the image engine knows how to lift one out of every
     // animated format this project accepts.
     const result = await this.image.run({ ...request, input, target: 'jpeg' });
-    return new Uint8Array(await result.output.arrayBuffer());
+    return new Uint8Array(await result.outputs[0]!.blob.arrayBuffer());
   }
 
   /** A JPEG still taken from a video's first frame. */

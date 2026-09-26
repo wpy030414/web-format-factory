@@ -394,8 +394,7 @@ export class MediabunnyEngine implements Engine {
     const spec = getFormat(target);
 
     return {
-      output: new Blob([buffer], { type: spec.mime }),
-      outputName: outputNameFor(request.inputName, spec.extension),
+      outputs: [{ blob: new Blob([buffer], { type: spec.mime }), name: outputNameFor(request.inputName, spec.extension) }],
       engineId: this.id,
       did: decision.did,
       ...(extraLosses.length > 0 ? { extraLosses } : {}),

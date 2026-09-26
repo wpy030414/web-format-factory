@@ -39,13 +39,10 @@ export type FromWorker =
   | {
       type: 'done';
       jobId: string;
-      output: Blob;
-      outputName: string;
+      outputs: Array<{ blob: Blob; name: string }>;
       engineId: string;
       did: 'transmux' | 'transcode';
       extraLosses: LossItem[];
-      /** A second file that belongs with the first — Apple's Live Photo is a pair. */
-      companion?: { blob: Blob; name: string };
     }
   | { type: 'error'; jobId: string; message: string; code: string };
 
@@ -169,12 +166,10 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
     post({
       type: 'done',
       jobId,
-      output: result.output,
-      outputName: result.outputName,
+      outputs: result.outputs,
       engineId: result.engineId,
       did: result.did,
       extraLosses: result.extraLosses ?? [],
-      ...(result.companion ? { companion: result.companion } : {}),
     });
   } catch (cause) {
     const described = describeError(cause);

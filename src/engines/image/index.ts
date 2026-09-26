@@ -79,8 +79,9 @@ export class ImageEngine implements Engine {
       const targetSpec = getFormat(target);
 
       return {
-        output,
-        outputName: outputNameFor(request.inputName, targetSpec.extension),
+        outputs: [
+          { blob: output, name: outputNameFor(request.inputName, targetSpec.extension) },
+        ],
         engineId: this.id,
         // Re-encoding an image always produces new compressed bytes; there is no
         // "copy the payload" path through a canvas.

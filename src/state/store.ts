@@ -41,11 +41,9 @@ export interface FileEntry {
   progress?: JobProgress;
   did?: 'transmux' | 'transcode';
   result?: {
-    blob: Blob;
-    name: string;
-    size: number;
-    /** A second file that belongs with the first: Apple's Live Photo is a pair. */
-    companion?: { blob: Blob; name: string; size: number };
+    /** Every file the engine produced. Almost always one entry; more for segmented GIFs and
+     *  Apple Live Photos. */
+    outputs: Array<{ blob: Blob; name: string; size: number }>;
   };
   /** Set once the result blob has been released — written to disk or IDB — and is no
    *  longer held in memory.  The name and size stay so the card can still show what
@@ -336,18 +334,11 @@ export const useStore = create<State>((set, get) => {
                 status: 'done',
                 did: outcome.did,
                 result: {
-                  blob: outcome.output,
-                  name: outcome.outputName,
-                  size: outcome.output.size,
-                  ...(outcome.companion
-                    ? {
-                        companion: {
-                          blob: outcome.companion.blob,
-                          name: outcome.companion.name,
-                          size: outcome.companion.blob.size,
-                        },
-                      }
-                    : {}),
+                  outputs: outcome.outputs.map((o) => ({
+                    blob: o.blob,
+                    name: o.name,
+                    size: o.blob.size,
+                  })),
                 },
               }
             : f,
@@ -357,14 +348,11 @@ export const useStore = create<State>((set, get) => {
       // Land the result to free memory if a drain mode is active.  This runs after
       // the store update so the card renders "done" first — landing is invisible
       // and the user sees the finished state before the blob is released.
-      void landResult(entry.id, {
-        blob: outcome.output,
-        name: outcome.outputName,
-        size: outcome.output.size,
-        ...(outcome.companion
-          ? { companion: outcome.companion }
-          : {}),
-      });
+      await landResult(entry.id, outcome.outputs.map((o) => ({
+        blob: o.blob,
+        name: o.name,
+        size: o.blob.size,
+      })));
     } catch (cause) {
       const { message } = asEngineError(cause);
       set((s) => ({
@@ -459,20 +447,11 @@ export const useStore = create<State>((set, get) => {
               ...f,
               drained: true,
               result: {
-                name: f.result.name,
-                size: f.result.size,
-                blob: undefined as unknown as Blob,
-                // Keep the companion's name and size so the card can still show "两个文件"
-                // rather than pretending the second half never existed.
-                ...(f.result.companion
-                  ? {
-                      companion: {
-                        blob: undefined as unknown as Blob,
-                        name: f.result.companion.name,
-                        size: f.result.companion.size,
-                      },
-                    }
-                  : {}),
+                outputs: f.result.outputs.map((o) => ({
+                  name: o.name,
+                  size: o.size,
+                  blob: undefined as unknown as Blob,
+                })),
               },
             }
           : f,
@@ -496,12 +475,11 @@ export const useStore = create<State>((set, get) => {
    * the per-session IndexedDB. On failure the blob stays in the entry — it is the only
    * copy and dropping it would be data loss.
    */
-  const landResult = async (id: string, outcome: {
+  const landResult = async (id: string, outputs: Array<{
     blob: Blob;
     name: string;
     size: number;
-    companion?: { blob: Blob; name: string };
-  }): Promise<void> => {
+  }>): Promise<void> => {
     const mode = get().drainMode;
     if (mode === 'none') return;
 
@@ -509,9 +487,8 @@ export const useStore = create<State>((set, get) => {
       const handle = get().drainHandle;
       if (!handle) return;
       try {
-        await writeOneToFolder(handle, outcome.blob, outcome.name);
-        if (outcome.companion) {
-          await writeOneToFolder(handle, outcome.companion.blob, outcome.companion.name);
+        for (const o of outputs) {
+          await writeOneToFolder(handle, o.blob, o.name);
         }
       } catch {
         // Write failed — keep the blob in memory rather than losing it.
@@ -524,9 +501,13 @@ export const useStore = create<State>((set, get) => {
     if (mode === 'idb') {
       try {
         const db = await ensureIdb();
-        await putIdbResult(db, id, outcome.blob, outcome.name, outcome.size);
-        if (outcome.companion) {
-          await putIdbCompanion(db, id, outcome.companion.blob, outcome.companion.name);
+        for (const o of outputs) {
+          await putIdbResult(db, id, o.blob, o.name, o.size);
+        }
+        // If more than one output, store extras as companions (backward compat with IDB schema).
+        for (let i = 1; i < outputs.length; i++) {
+          const extra = outputs[i]!;
+          await putIdbCompanion(db, `${id}_${i}`, extra.blob, extra.name);
         }
       } catch {
         return;
@@ -715,13 +696,13 @@ export const useStore = create<State>((set, get) => {
 
       // Collect whatever blobs are still in memory, plus those in IDB.
       const memFiles = state.files
-        .filter((f) => f.status === 'done' && f.result?.blob)
-        .flatMap((f) => resultFiles({ blob: f.result!.blob!, name: f.result!.name, companion: f.result!.companion ? { blob: f.result!.companion.blob!, name: f.result!.companion.name } : undefined }));
+        .filter((f) => f.status === 'done' && f.result && f.result.outputs.some((o) => o.blob))
+        .flatMap((f) => f.result!.outputs.filter((o) => o.blob).map((o) => ({ blob: o.blob, name: o.name })));
 
       // For IDB mode, also collect drained entries — we read them back on demand.
       if (state.drainMode === 'idb' && state.idbDb) {
         const drainedIds = state.files
-          .filter((f) => f.status === 'done' && f.drained && !f.result?.blob)
+          .filter((f) => f.status === 'done' && f.drained)
           .map((f) => f.id);
         if (drainedIds.length > 0) {
           void (async () => {
@@ -780,12 +761,17 @@ export const useStore = create<State>((set, get) => {
       if (mode === 'idb') {
         const db = get().idbDb;
         if (!db) return;
+        const files: { blob: Blob; name: string }[] = [];
+        // Fetch primary entry
         const record = await getIdbResult(db, id);
-        if (!record) return;
-        // Also fetch companion if present
-        const companion = await getIdbResult(db, `${id}/companion`);
-        const files = [{ blob: record.blob, name: record.name }];
-        if (companion) files.push({ blob: companion.blob, name: companion.name });
+        if (record) files.push({ blob: record.blob, name: record.name });
+        // Fetch any extra segments (only Live Photo used companion; now GIF segments do too)
+        for (let i = 1; i < 20; i++) {
+          const extra = await getIdbResult(db, `${id}_${i}`);
+          if (extra) files.push({ blob: extra.blob, name: extra.name });
+          else break;
+        }
+        if (files.length === 0) return;
         void saveFiles(files);
       }
     },
@@ -954,26 +940,20 @@ export function pickDefaultTarget(
 }
 
 /**
- * Every file a finished result consists of, primary first.
+ * Every file a finished result consists of.
  *
- * Almost every result is one file. Apple's Live Photo is the exception: asked for as two
- * files it comes back as a still plus a video, and both are useless without the other.
+ * Accepts the new `outputs[]` shape. Almost every result is one file. Apple's Live Photo
+ * and segmented GIFs are the common two-or-more cases.
  */
 export function resultFiles(result: {
-  blob: Blob;
-  name: string;
-  companion?: { blob: Blob; name: string };
+  outputs: Array<{ blob: Blob; name: string }>;
 }): { blob: Blob; name: string }[] {
-  const files = [{ blob: result.blob, name: result.name }];
-  if (result.companion) files.push({ blob: result.companion.blob, name: result.companion.name });
-  return files;
+  return result.outputs.map((o) => ({ blob: o.blob, name: o.name }));
 }
 
 /** Save every file a result consists of. */
 export function downloadResult(result: {
-  blob: Blob;
-  name: string;
-  companion?: { blob: Blob; name: string };
+  outputs: Array<{ blob: Blob; name: string }>;
 }): void {
   for (const file of resultFiles(result)) triggerDownload(file.blob, file.name);
 }

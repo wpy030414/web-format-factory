@@ -91,15 +91,15 @@ async function convert(
     params,
   });
 
-  const bytes = new Uint8Array(await result.output.arrayBuffer());
+  const bytes = new Uint8Array(await result.outputs[0]!.blob.arrayBuffer());
   expect(bytes.byteLength).toBeGreaterThan(0);
 
   const dir = mkdtempSync(join(tmpdir(), 'wff-engine-'));
   tmpDirs.push(dir);
-  const path = join(dir, result.outputName);
+  const path = join(dir, result.outputs[0]!.name);
   writeFileSync(path, bytes);
 
-  return { probe: ffprobe(path), name: result.outputName, did: result.did };
+  return { probe: ffprobe(path), name: result.outputs[0]!.name, did: result.did };
 }
 
 /** Build an Input over a fixture, for planning assertions. */

@@ -23,13 +23,10 @@ export interface ConvertOptions {
 }
 
 export interface ConvertOutcome {
-  output: Blob;
-  outputName: string;
+  outputs: Array<{ blob: Blob; name: string }>;
   engineId: string;
   did: 'transmux' | 'transcode';
   extraLosses: LossItem[];
-  /** A second file that belongs with the first — Apple's Live Photo is a pair. */
-  companion?: { blob: Blob; name: string };
 }
 
 interface PendingJob {
@@ -107,12 +104,10 @@ export class MediaEngineClient {
 
     if (msg.type === 'done') {
       pending.resolve({
-        output: msg.output,
-        outputName: msg.outputName,
+        outputs: msg.outputs,
         engineId: msg.engineId,
         did: msg.did,
         extraLosses: msg.extraLosses,
-        ...(msg.companion ? { companion: msg.companion } : {}),
       });
       return;
     }

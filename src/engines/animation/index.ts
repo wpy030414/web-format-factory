@@ -110,12 +110,19 @@ export class AnimationEngine implements Engine {
     const { target, signal } = request;
 
     const spec = getFormat(target);
-    const output =
-      target === 'gif' ? await this.#toGif(request) : await this.#toVideo(request, target, signal);
 
+    if (target === 'gif') {
+      const blob = await this.#toGif(request);
+      return {
+        outputs: [{ blob, name: outputNameFor(request.inputName, spec.extension) }],
+        engineId: this.id,
+        did: 'transcode',
+      };
+    }
+
+    const output = await this.#toVideo(request, target, signal);
     return {
-      output,
-      outputName: outputNameFor(request.inputName, spec.extension),
+      outputs: [{ blob: output, name: outputNameFor(request.inputName, spec.extension) }],
       engineId: this.id,
       did: 'transcode',
     };
