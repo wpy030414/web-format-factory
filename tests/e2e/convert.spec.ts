@@ -1430,27 +1430,42 @@ test.describe('能力诊断页', () => {
     await page.getByRole('link', { name: /返回转换器/ }).click();
     await expect(page.getByRole('heading', { name: 'Web Format Factory' })).toBeVisible();
   });
+});
 
-  test('强制刷新：先说清代价，确认后真的清掉缓存，然后重新加载', async ({ page }) => {
-    await page.goto('/#/capabilities');
-    await expect(page.getByRole('button', { name: '强制刷新' })).toBeVisible();
+test.describe('页脚', () => {
+  test('强制刷新：在诊断入口右侧，弹窗说清代价，确认后真的清掉缓存并重新加载', async ({ page }) => {
+    await page.goto('/');
 
-    // Nothing is cleared on the first click. Dropping the engine cache costs a 31 MB
-    // download next time, so the button asks before it spends that — and a cancel is a
-    // real way back, not a dead end.
-    await page.getByTestId('force-refresh').click();
-    await expect(page.getByTestId('force-refresh-confirm')).toBeVisible();
-    await expect(page.getByText(/重新下载兜底引擎/)).toBeVisible();
+    // Beside the diagnostics entry and on the same row, not wrapped under it: the two are
+    // one step apart in the same job, and the entry has to be where it was asked to be.
+    const link = page.getByRole('link', { name: /本机能力诊断/ });
+    const entry = page.getByTestId('force-refresh');
+    await expect(entry).toBeVisible();
+    const linkBox = (await link.boundingBox())!;
+    const entryBox = (await entry.boundingBox())!;
+    expect(entryBox.x).toBeGreaterThan(linkBox.x);
+    expect(Math.abs(entryBox.y - linkBox.y)).toBeLessThan(10);
+
+    // It is a dialog, not the footer growing: what it has to say — what goes, what does
+    // not, and what it costs — is more than a footer line can hold without deforming it.
+    const dialog = page.getByRole('dialog', { name: '强制刷新' });
+    await expect(dialog).toBeHidden();
+    await entry.click();
+    await expect(dialog).toBeVisible();
+
+    // Dropping the engine cache costs a 31 MB download next time, so the dialog says so
+    // before spending it, and a cancel is a real way back rather than a dead end.
+    await expect(dialog.getByText(/兜底引擎/)).toBeVisible();
     await page.getByRole('button', { name: '取消' }).click();
-    await expect(page.getByTestId('force-refresh')).toBeVisible();
+    await expect(dialog).toBeHidden();
 
     // Asking again, for real this time.
-    await page.getByTestId('force-refresh').click();
-    await expect(page.getByTestId('force-refresh-confirm')).toBeVisible();
+    await entry.click();
+    await expect(dialog).toBeVisible();
 
     // Plant something to clear. Asserting only that the button was pressed would pass even
     // if the clearing silently did nothing — which is the failure that matters here, since
-    // the whole premise is that a stale cache is invisible from this page.
+    // the whole premise is that a stale cache is invisible from the page it affects.
     await page.evaluate(() => void caches.open('e2e-planted'));
     expect(await page.evaluate(() => caches.keys())).toContain('e2e-planted');
 

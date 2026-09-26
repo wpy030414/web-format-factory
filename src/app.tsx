@@ -5,6 +5,7 @@ import { BatchCard } from '@/ui/batch-card.tsx';
 import { Dropzone } from '@/ui/dropzone.tsx';
 import { FileCard } from '@/ui/file-card.tsx';
 import { CapabilitiesPage } from '@/ui/capabilities.tsx';
+import { ForceRefresh } from '@/ui/force-refresh.tsx';
 import { Switch } from '@/components/ui/switch.tsx';
 import { GithubMark } from '@/ui/github-mark.tsx';
 import { Activity } from 'lucide-react';
@@ -159,7 +160,9 @@ function Converter() {
         </>
       )}
 
-      <footer className="text-muted-foreground border-border mt-10 flex items-center gap-1.5 border-t pt-5 text-xs">
+      {/* 1rem between entries, not the couple of pixels a tight footer usually gets: two
+          separate actions sitting that close read as one phrase. */}
+      <footer className="text-muted-foreground border-border mt-10 flex items-center gap-4 border-t pt-5 text-xs">
         <a
           href="#/capabilities"
           className="hover:text-foreground inline-flex items-center gap-1"
@@ -167,6 +170,10 @@ function Converter() {
           <Activity className="size-3" />
           本机能力诊断
         </a>
+        {/* Next to the diagnostics entry, because it is the step before that page: what the
+            report shows is partly decided by caches, and a stale one is indistinguishable
+            from a real answer once you are looking at it. */}
+        <ForceRefresh />
         <a
           href="https://github.com/wpy030414/web-format-factory"
           target="_blank"

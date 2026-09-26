@@ -24,6 +24,7 @@
     "@mediabunny/aac-encoder": "1.60.0",
     "@mediabunny/flac-encoder": "1.60.0",
     "@mediabunny/mp3-encoder": "1.60.0",
+    "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-select": "^2.3.7",
     "@radix-ui/react-slider": "^1.4.7",
     "@radix-ui/react-switch": "^1.3.7",
