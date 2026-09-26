@@ -43,6 +43,10 @@ function Converter() {
   const downloadAll = useStore((s) => s.downloadAll);
   const clearFinished = useStore((s) => s.clearFinished);
   const measureCapabilities = useStore((s) => s.measureCapabilities);
+  // The heading doubles as a version readout: one click shows the commit the running
+  // bundle was built from, one more puts the name back. Local state on purpose — this
+  // is a peek, not a mode, and it should not survive anything.
+  const [hashShown, setHashShown] = useState(false);
 
   // The one capability that has to be measured rather than read. It only ever *closes*
   // routes the user has not chosen a codec for yet, so nothing flashes: the picker is not
@@ -93,7 +97,25 @@ function Converter() {
   return (
     <div className="mx-auto max-w-3xl px-5 py-10">
       <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Web Format Factory</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {/*
+            A real button so the peek is keyboard-reachable, not a click handler on a
+            heading. Absent entirely when the bundle has no hash to show (built outside
+            a git checkout): a control that reveals nothing is a lie, not a fallback.
+          */}
+          {__COMMIT_HASH__ ? (
+            <button
+              type="button"
+              onClick={() => setHashShown((v) => !v)}
+              title="点击显示构建 commit"
+              className="cursor-pointer"
+            >
+              {hashShown ? __COMMIT_HASH__ : 'Web Format Factory'}
+            </button>
+          ) : (
+            'Web Format Factory'
+          )}
+        </h1>
         {/*
           A switch, not a checkbox, and the distinction is load-bearing rather than
           cosmetic: `role="switch"` keeps this control out of `getByRole('checkbox')`,

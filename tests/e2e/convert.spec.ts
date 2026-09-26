@@ -234,6 +234,22 @@ test.describe('页面与语义边界', () => {
     );
   });
 
+  test('点标题显示构建 commit 短哈希，再点复原', async ({ page }) => {
+    // The heading is the version readout: the commit the running bundle was built from,
+    // seven hex digits, on demand. "What version are you running?" needs an answer the
+    // user can actually give — and the answer has to go away again, because the name is
+    // what orients everyone else.
+    // Scoped by structure, not by name: the button's accessible name IS its state, so
+    // a name-based locator stops matching the moment the first click does its job.
+    const title = page.getByRole('heading').getByRole('button');
+    await expect(title).toHaveText('Web Format Factory');
+    await title.click();
+    await expect(title).toHaveText(/^[0-9a-f]{7}$/);
+
+    await title.click();
+    await expect(title).toHaveText('Web Format Factory');
+  });
+
   test('开发服务器下发了跨源隔离响应头', async ({ page }) => {
     // Only the fallback ffmpeg engine needs this, but it must be verifiable rather
     // than assumed — a missing header makes that engine hang silently.

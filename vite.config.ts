@@ -1,8 +1,32 @@
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath } from 'node:url';
+
+/**
+ * The commit this build is made from, first seven hex digits.
+ *
+ * Baked in at build time because the client has no other way to know its own version:
+ * the heading can be clicked to show it, which turns "what version are you running?"
+ * from a question the user cannot answer into a glance. Evaluated once per server or
+ * build start, which is exactly the lifetime of the artifacts it names. Empty string
+ * when built outside a git checkout — the toggle then stays a plain heading rather
+ * than promising a version it does not have.
+ */
+const commitHash = (() => {
+  try {
+    return execSync('git rev-parse HEAD', {
+      cwd: fileURLToPath(new URL('./', import.meta.url)),
+    })
+      .toString()
+      .trim()
+      .slice(0, 7);
+  } catch {
+    return '';
+  }
+})();
 
 /**
  * Cross-origin isolation headers.
@@ -20,6 +44,9 @@ export const crossOriginIsolationHeaders = {
 };
 
 export default defineConfig({
+  define: {
+    __COMMIT_HASH__: JSON.stringify(commitHash),
+  },
   plugins: [
     react(),
     tailwindcss(),
