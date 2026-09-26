@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Play, Download, Trash2, Loader2 } from 'lucide-react';
-import { planFor } from '@/core/routing/resolve.ts';
-import { useStore } from '@/state/store.ts';
+import { isActionable, isAwaitingAck, isBlocked, useStore } from '@/state/store.ts';
+import { BatchCard } from '@/ui/batch-card.tsx';
 import { Dropzone } from '@/ui/dropzone.tsx';
 import { FileCard } from '@/ui/file-card.tsx';
 import { CapabilitiesPage } from '@/ui/capabilities.tsx';
+import { Switch } from '@/components/ui/switch.tsx';
 import { GithubMark } from '@/ui/github-mark.tsx';
 import { Activity } from 'lucide-react';
 
@@ -55,39 +56,43 @@ function Converter() {
     [addFiles],
   );
 
-  const isActionable = useCallback(
-    (f: (typeof files)[number]): boolean => {
-      if (!f.profile || !f.target) return false;
-      if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-      const plan = planFor(f.profile, f.target, caps, f.params ?? {});
-      if (!plan.feasible) return false;
-      // A file waiting on acknowledgement is not ready. Counting it as ready would
-      // enable a button that then does nothing at all — a silent no-op, which is worse
-      // than a disabled button, because the user has no idea why nothing happened.
-      if (plan.needsAcknowledgement && !f.acknowledged) return false;
-      return true;
-    },
-    [files, caps],
-  );
+  const batch = useStore((s) => s.batch);
+  const setBatch = useStore((s) => s.setBatch);
 
-  const readyCount = files.filter(isActionable).length;
+  // The counts come from the store's own predicates — the very ones `startAll` queues
+  // with — so the button can never promise work the loop then skips. A count that
+  // overstates is a silent no-op, which is worse than a disabled button.
+  const readyCount = files.filter((f) => isActionable(f, caps, batch)).length;
   const doneCount = files.filter((f) => f.status === 'done').length;
-
   // Kept separate so the UI can explain the wait instead of just refusing.
-  const awaitingAck = files.filter((f) => {
-    if (!f.profile || !f.target) return false;
-    if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
-    const plan = planFor(f.profile, f.target, caps, f.params ?? {});
-    return plan.feasible && plan.needsAcknowledgement && !f.acknowledged;
-  }).length;
-  const blocked = files.filter(
-    (f) => f.status === 'ready' && f.profile && (!f.target || f.profile.mediaClass === 'unknown'),
-  ).length;
+  const awaitingAck = files.filter((f) => isAwaitingAck(f, caps, batch)).length;
+  const blocked = files.filter((f) => isBlocked(f, batch)).length;
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-10">
-      <header className="mb-7">
+      <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Web Format Factory</h1>
+        {/*
+          A switch, not a checkbox, and the distinction is load-bearing rather than
+          cosmetic: `role="switch"` keeps this control out of `getByRole('checkbox')`,
+          which is how the acknowledgement box on a card is found. A plain checkbox here
+          would make that lookup ambiguous the moment a file needs acknowledging.
+        */}
+        <div className="flex shrink-0 items-center gap-2 text-sm">
+          <label
+            htmlFor="batch-switch"
+            className="text-muted-foreground cursor-pointer select-none"
+          >
+            批量
+          </label>
+          <Switch
+            id="batch-switch"
+            data-testid="batch-switch"
+            checked={batch.enabled}
+            onCheckedChange={setBatch}
+            aria-label="批量"
+          />
+        </div>
       </header>
 
       <Dropzone onFiles={onFiles} />
@@ -142,26 +147,16 @@ function Converter() {
             )}
           </div>
 
+          {/* Sits between the toolbar and the list, never inside it: the list's children
+              are <li> elements, and a section among them would be invalid markup. */}
+          {batch.enabled && <BatchCard />}
+
           <ul className="mt-4 space-y-3">
             {files.map((entry) => (
               <FileCard key={entry.id} entry={entry} />
             ))}
           </ul>
         </>
-      )}
-
-      {files.length === 0 && (
-        <section className="mt-10">
-          <h2 className="mb-2 text-sm font-medium">这个工具不会替你做的事</h2>
-          <ul className="text-muted-foreground space-y-1.5 text-xs leading-relaxed">
-            <li>· 不会把音频变成视频——那需要凭空发明画面，那是创作，不是转换。</li>
-            <li>· 不会把一张静图拉成动图或视频——缺少的帧不会凭空出现。</li>
-            <li>· 不会缩放分辨率、裁剪画面、调整帧率——那些是编辑，不是转换。</li>
-          </ul>
-          <p className="text-muted-foreground mt-3 text-xs">
-            帮你做这些决定很容易，但那样你拿到的就不是你以为的东西了。
-          </p>
-        </section>
       )}
 
       <footer className="text-muted-foreground border-border mt-10 flex items-center gap-1.5 border-t pt-5 text-xs">

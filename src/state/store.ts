@@ -5,7 +5,7 @@ import { triggerDownload } from '../lib/download.ts';
 import type { ConvertOutcome } from '../engines/client.ts';
 import type { JobProgress } from '../engines/types.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
-import { FORMATS } from '../core/registry/formats.ts';
+import { FORMATS, ALL_FORMAT_IDS } from '../core/registry/formats.ts';
 import { pairLivePhotos, type PairingCandidate } from '../livephoto/detect.ts';
 import { buildLivp } from '../livephoto/pack.ts';
 import { planFor, type ResolvedPlan } from '../core/routing/resolve.ts';
@@ -61,6 +61,113 @@ export interface FileEntry {
   };
 }
 
+/**
+ * The batch's shared conversion configuration.
+ *
+ * Batch mode exists because batch use is the normal use — dropping ten files and picking a
+ * target ten times is the thing worth removing, not the single-file case. It is off by
+ * default, and off means the per-file fields govern exactly as they always have.
+ */
+export interface BatchChoice {
+  enabled: boolean;
+  target: FormatId | null;
+  params: Record<string, unknown>;
+}
+
+export const NO_BATCH: BatchChoice = { enabled: false, target: null, params: {} };
+
+/**
+ * Drop the shared target while keeping the mode.
+ *
+ * Used when the last file leaves: a batch with nothing in it has nothing to convert to, and
+ * keeping the departed file's target would make the next drop inherit a choice made about
+ * something else.
+ */
+const clearBatchTarget = (batch: BatchChoice): BatchChoice =>
+  batch.target === null ? batch : { ...batch, target: null, params: {} };
+
+/**
+ * What a file will actually be converted to.
+ *
+ * The one place the mode is consulted. The planner, the toolbar's counts and the job
+ * itself all ask this rather than reading `entry.target`, so "what happens if I press
+ * Convert" has a single answer instead of several that can quietly disagree.
+ */
+export function resolveChoice(
+  entry: Pick<FileEntry, 'target' | 'params'>,
+  batch: BatchChoice,
+): { target: FormatId | null; params: Record<string, unknown> } {
+  return batch.enabled
+    ? { target: batch.target, params: batch.params }
+    : { target: entry.target, params: entry.params ?? {} };
+}
+
+/**
+ * A shared target for a batch that does not have one yet.
+ *
+ * Whatever the first identifiable file in the batch would have been offered on its own. For
+ * a batch of one kind — the ordinary case — that is the very target the single card would
+ * have preselected, so switching batch mode on changes nothing the user can see. For a
+ * mixed batch it is the first file's answer, which a later file may not be able to reach:
+ * the batch runs anyway and says so per file, rather than inventing a fallback.
+ */
+export function seedBatchChoice(
+  files: readonly FileEntry[],
+  caps: RouteCapabilities,
+): { target: FormatId | null; params: Record<string, unknown> } {
+  const first = files.find((f) => f.profile && f.profile.mediaClass !== 'unknown');
+  if (!first?.profile) return { target: null, params: {} };
+  const target = pickDefaultTarget(first.profile, caps);
+  return { target, params: target ? defaultParamsFor(target) : {} };
+}
+
+/**
+ * Every target at least one file in the batch can reach.
+ *
+ * A union, deliberately, and not an intersection: a batch holding an image and a video has
+ * no target in common at all, so an intersection would offer nothing and the honest-looking
+ * choice would be the useless one. Grouping is by format family, so the rows read the same
+ * as a single card's.
+ */
+export function offeredTargets(files: readonly FileEntry[], caps: RouteCapabilities): FormatId[] {
+  const profiled = files.filter((f) => f.profile && f.profile.mediaClass !== 'unknown');
+  return ALL_FORMAT_IDS.filter((t) => profiled.some((f) => planFor(f.profile!, t, caps).feasible));
+}
+
+/**
+ * Whether Convert would act on this file right now.
+ *
+ * Shared with the toolbar so the count on the button is the count `startAll` will queue. A
+ * count that promises more than the button delivers is a silent no-op, which is worse than
+ * a disabled button: nothing happens and nothing says why.
+ */
+export function isActionable(f: FileEntry, caps: RouteCapabilities, batch: BatchChoice): boolean {
+  if (!f.profile) return false;
+  if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
+  const { target, params } = resolveChoice(f, batch);
+  if (!target) return false;
+  const plan = planFor(f.profile, target, caps, params);
+  if (!plan.feasible) return false;
+  if (plan.needsAcknowledgement && !f.acknowledged) return false;
+  return true;
+}
+
+/** Feasible, but waiting on the user to accept a loss. Counted separately so the UI can explain. */
+export function isAwaitingAck(f: FileEntry, caps: RouteCapabilities, batch: BatchChoice): boolean {
+  if (!f.profile) return false;
+  if (f.status === 'done' || f.status === 'running' || f.status === 'queued') return false;
+  const { target, params } = resolveChoice(f, batch);
+  if (!target) return false;
+  const plan = planFor(f.profile, target, caps, params);
+  return plan.feasible && plan.needsAcknowledgement && !f.acknowledged;
+}
+
+/** Ready, but with nothing it could be converted to — a file that would strand without a word. */
+export function isBlocked(f: FileEntry, batch: BatchChoice): boolean {
+  if (f.status !== 'ready' || !f.profile) return false;
+  return !resolveChoice(f, batch).target || f.profile.mediaClass === 'unknown';
+}
+
 interface State {
   files: FileEntry[];
   running: number;
@@ -75,6 +182,15 @@ interface State {
   caps: RouteCapabilities;
 
   /**
+   * The batch's shared conversion configuration.
+   *
+   * Held on the store rather than distributed onto each entry, which is exactly what makes
+   * the switch non-destructive: turning batch mode off leaves every file's own target and
+   * parameters untouched, and turning it back on finds the shared ones where they were.
+   */
+  batch: BatchChoice;
+
+  /**
    * Measure what this machine can encode — the one capability that has to be probed
    * rather than read — and fold the answer into `caps`.
    *
@@ -86,6 +202,11 @@ interface State {
   clearFinished: () => void;
   setTarget: (id: string, target: FormatId) => void;
   setParam: (id: string, key: string, value: unknown) => void;
+  /** Turn batch mode on or off. The per-file choices survive either way. */
+  setBatch: (enabled: boolean) => void;
+  /** The one target the whole batch shares while batch mode is on. */
+  setBatchTarget: (target: FormatId) => void;
+  setBatchParam: (key: string, value: unknown) => void;
   acknowledge: (id: string, value: boolean) => void;
   startAll: () => void;
   cancelAll: () => void;
@@ -124,9 +245,9 @@ export const useStore = create<State>((set, get) => {
    * Coalesce progress reports to one update per animation frame.
    *
    * Reports arrive once per packet, and each one would otherwise map the entire file list
-   * and re-render every card: a measured 512 MB container copy emits 17,242 of them inside
-   * 440 ms. Dropping the values in between costs nothing — only the latest is ever drawn —
-   * and collapsing them to one per frame turns those 17,242 updates into 18.
+   * and re-render every card. Dropping the values in between costs nothing — only the
+   * latest is ever drawn — but the volume is real: a container copy has no decode step to
+   * slow it down, which is precisely the case whose progress is most worth watching.
    */
   const pendingProgress = new Map<string, JobProgress>();
   let progressFrame: number | null = null;
@@ -158,8 +279,11 @@ export const useStore = create<State>((set, get) => {
   /** Run one file's conversion to completion, updating state as it goes. */
   const runOne = async (entry: FileEntry): Promise<void> => {
     const state = get();
+    // Captured once, at the start: flipping the switch mid-job must not change what a job
+    // already in flight is doing.
+    const { target, params } = resolveChoice(entry, state.batch);
     const plan = state.planForFile(entry.id);
-    if (!plan?.feasible || !entry.target) {
+    if (!plan?.feasible || !target) {
       set((s) => ({
         files: s.files.map((f) =>
           f.id === entry.id ? { ...f, status: 'error', error: '该转换不可行' } : f,
@@ -177,8 +301,8 @@ export const useStore = create<State>((set, get) => {
         jobId: entry.id,
         file: entry.file,
         fileName: entry.file.name,
-        target: entry.target,
-        params: entry.params ?? {},
+        target,
+        params,
         onProgress: (progress) => reportProgress(entry.id, progress),
       });
 
@@ -249,20 +373,28 @@ export const useStore = create<State>((set, get) => {
       entries.map(async (entry) => {
         try {
           const profile = await client.probe(entry.file, entry.file.name);
-          set((s) => ({
-            files: s.files.map((f) =>
+          set((s) => {
+            const files = s.files.map((f) =>
               f.id === entry.id
                 ? {
                     ...f,
                     profile,
-                    status: 'ready',
+                    status: 'ready' as FileStatus,
                     // Preselect a sensible target, or leave it null when nothing is
                     // feasible so the user sees the refusals rather than a guess.
-                    ...seedTarget(f, profile, get().caps),
+                    ...seedTarget(f, profile, s.caps),
                   }
                 : f,
-            ),
-          }));
+            );
+            // Batch mode can be switched on before anything is ready to give it a target.
+            // The first file to arrive supplies one — and only the first, so a choice the
+            // user has since made is never overwritten by a straggler finishing later.
+            const batch =
+              s.batch.enabled && !s.batch.target
+                ? { enabled: true, ...seedBatchChoice(files, s.caps) }
+                : s.batch;
+            return { files, batch };
+          });
         } catch (cause) {
           const { message } = asEngineError(cause);
           set((s) => ({
@@ -280,6 +412,7 @@ export const useStore = create<State>((set, get) => {
     running: 0,
     engine: null,
     caps: readRouteCapabilities(),
+    batch: NO_BATCH,
 
     measureCapabilities() {
       void probeEncoders().then(({ video, audio }) => {
@@ -331,13 +464,17 @@ export const useStore = create<State>((set, get) => {
     },
 
     removeFile(id) {
-      set((s) => ({ files: s.files.filter((f) => f.id !== id) }));
+      set((s) => {
+        const files = s.files.filter((f) => f.id !== id);
+        return { files, batch: files.length === 0 ? clearBatchTarget(s.batch) : s.batch };
+      });
     },
 
     clearFinished() {
-      set((s) => ({
-        files: s.files.filter((f) => f.status !== 'done' && f.status !== 'cancelled'),
-      }));
+      set((s) => {
+        const files = s.files.filter((f) => f.status !== 'done' && f.status !== 'cancelled');
+        return { files, batch: files.length === 0 ? clearBatchTarget(s.batch) : s.batch };
+      });
     },
 
     setTarget(id, target) {
@@ -363,6 +500,42 @@ export const useStore = create<State>((set, get) => {
       }));
     },
 
+    setBatch(enabled) {
+      set((s) => {
+        // Turning it on with nothing chosen yet inherits the first file's own default, so
+        // the batch starts from something the user would have picked anyway.
+        const batch =
+          enabled && !s.batch.target
+            ? { enabled: true, ...seedBatchChoice(s.files, s.caps) }
+            : { ...s.batch, enabled };
+
+        return {
+          batch,
+          // Every acknowledgement was given against a particular target. Changing which
+          // target governs a file — which is what flipping the mode does — invalidates all
+          // of them, in both directions. Re-asking costs a click; a stale tick silently
+          // releasing a destructive conversion is the kind of lie this app exists to avoid.
+          files: s.files.map((f) => (f.acknowledged ? { ...f, acknowledged: false } : f)),
+        };
+      });
+    },
+
+    setBatchTarget(target) {
+      // Re-picking the target that is already chosen is not a change, and wiping the
+      // parameters for it would throw away settings the user just made. Same rule as the
+      // per-file picker, and it matters more here: one click now affects every file.
+      if (get().batch.target === target) return;
+
+      set((s) => ({
+        batch: { ...s.batch, target, params: defaultParamsFor(target) },
+        files: s.files.map((f) => (f.acknowledged ? { ...f, acknowledged: false } : f)),
+      }));
+    },
+
+    setBatchParam(key, value) {
+      set((s) => ({ batch: { ...s.batch, params: { ...s.batch.params, [key]: value } } }));
+    },
+
     acknowledge(id, value) {
       set((s) => ({
         files: s.files.map((f) => (f.id === id ? { ...f, acknowledged: value } : f)),
@@ -372,11 +545,10 @@ export const useStore = create<State>((set, get) => {
     startAll() {
       set((s) => ({
         files: s.files.map((f) => {
-          if (!f.profile || !f.target) return f;
-          const plan = planFor(f.profile, f.target, get().caps, f.params ?? {});
-          if (!plan.feasible) return f;
-          // A critical loss must be acknowledged before we will start.
-          if (plan.needsAcknowledgement && !f.acknowledged) return f;
+          // Deliberately the same predicate the toolbar counts with. The button must not
+          // promise work this loop will then skip — that is a silent no-op, and a silent
+          // no-op is worse than a disabled button.
+          if (!isActionable(f, s.caps, s.batch)) return f;
           return { ...f, status: 'queued' as FileStatus, progress: undefined, error: undefined };
         }),
       }));
@@ -397,10 +569,12 @@ export const useStore = create<State>((set, get) => {
 
     planForFile(id) {
       const entry = get().files.find((f) => f.id === id);
-      if (!entry?.profile || !entry.target) return null;
+      if (!entry?.profile) return null;
+      const { target, params } = resolveChoice(entry, get().batch);
+      if (!target) return null;
       // Parameters change the verdict: asking for a specific codec turns a lossless
       // container change into a re-encode, and the badges have to say so.
-      return planFor(entry.profile, entry.target, get().caps, entry.params ?? {});
+      return planFor(entry.profile, target, get().caps, params);
     },
 
     downloadAll() {

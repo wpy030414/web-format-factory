@@ -10,7 +10,6 @@ import {
   Link2,
   Unlink,
 } from 'lucide-react';
-import { cn } from '@/lib/utils.ts';
 import { FORMATS } from '@/core/registry/formats.ts';
 import { MEDIA_CLASS_LABELS } from '@/core/probe/classify.ts';
 import { describeProfile, formatSize } from '@/core/probe/profile.ts';
@@ -18,7 +17,7 @@ import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
 import { planAllTargets, planFor } from '@/core/routing/resolve.ts';
 import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
 import type { JobPhase, JobProgress } from '@/engines/types.ts';
-import { resultFiles, type FileEntry } from '@/state/store.ts';
+import { resultFiles, resolveChoice, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
 import { canSaveToFolder, saveFiles } from '@/lib/save.ts';
 import { canShareFiles, shareFiles } from '@/lib/share.ts';
@@ -30,13 +29,7 @@ import {
   SpeedBadge,
 } from './fidelity-badge.tsx';
 import { ParamPanel } from './param-panel.tsx';
-
-const FAMILY_LABELS: Record<string, string> = {
-  image: '图像',
-  video: '视频',
-  audio: '音频',
-  live: 'Live Photo',
-};
+import { TargetPicker } from './target-picker.tsx';
 
 /** What a phase means when the engine gives no wording of its own. */
 const PHASE_LABELS: Record<JobPhase, string> = {
@@ -54,10 +47,10 @@ const PHASE_LABELS: Record<JobPhase, string> = {
  *
  * Exported so the honesty rules can be unit-tested without a DOM: a percentage may only
  * appear when the engine actually reported one, a frame count when it actually reported
- * frames, and the reason a bar is indeterminate is never invented. The copy this replaced
- * claimed 「流复制，无法预估进度」 for every ratio-less report — but a stream copy is the one
- * case that *does* report a ratio, and the engines that leave it undefined (the image
- * stack, frames→video, Live Photo's phase markers) are not stream copies at all.
+ * frames, and the reason a bar is indeterminate is never invented. The old copy claimed
+ * 「流复制，无法预估进度」 for every ratio-less report — but stream copies are the one case
+ * that *does* report a ratio, and the engines that leave it undefined (the image stack,
+ * frames→video, Live Photo's phase markers) are not stream copies at all.
  */
 export function progressCaption(progress: JobProgress | undefined, copying: boolean): string {
   if (!progress) return '转换中…';
@@ -88,6 +81,7 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   const pairManually = useStore((s) => s.pairManually);
   const allFiles = useStore((s) => s.files);
   const caps = useStore((s) => s.caps);
+  const batch = useStore((s) => s.batch);
   const [showImpossible, setShowImpossible] = useState(false);
 
   const plans = useMemo(
@@ -99,11 +93,8 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   // Parameters are part of the plan, not decoration on top of it: asking for a specific
   // codec or quality turns a lossless container change into a re-encode, and the verdict
   // has to move with the settings that caused it.
-  const params = entry.params ?? {};
-  const active =
-    entry.profile && entry.target
-      ? planFor(entry.profile, entry.target, caps, params)
-      : null;
+  const { target, params } = resolveChoice(entry, batch);
+  const active = entry.profile && target ? planFor(entry.profile, target, caps, params) : null;
 
   // Several targets usually fail for the same reason — an audio file cannot become a
   // video, a GIF, or a Live Photo, and listing that sentence six times buries the one
@@ -259,29 +250,61 @@ export function FileCard({ entry }: { entry: FileEntry }) {
 
       {entry.profile && entry.profile.mediaClass !== 'unknown' && (
         <>
-          <TargetPicker
-            feasible={feasible.map((p) => p.target)}
-            current={entry.target}
-            familyOf={(t) => FORMATS[t].family}
-            onPick={(t) => setTarget(entry.id, t)}
-            disabled={busy}
-          />
-
           {/*
-            Parameters come before the verdict. The verdict is a consequence of these
-            settings, so reading it after them is the natural order — and it means the
-            summary is the last thing seen before Convert.
+            In batch mode the choice lives in one card below the toolbar. Rendering a second
+            picker here would be a second answer to the same question — and two buttons with
+            the same label on screen at once, which a user (or a test) cannot tell apart.
           */}
-          {entry.target && (
-            <ParamPanel
-              target={entry.target}
-              values={entry.params ?? {}}
-              onChange={(key, value) => setParam(entry.id, key, value)}
-              disabled={busy || entry.status === 'done'}
-            />
+          {!batch.enabled && (
+            <>
+              <TargetPicker
+                feasible={feasible.map((p) => p.target)}
+                current={entry.target}
+                familyOf={(t) => FORMATS[t].family}
+                onPick={(t) => setTarget(entry.id, t)}
+                disabled={busy}
+              />
+
+              {/*
+                Parameters come before the verdict. The verdict is a consequence of these
+                settings, so reading it after them is the natural order — and it means the
+                summary is the last thing seen before Convert.
+              */}
+              {entry.target && (
+                <ParamPanel
+                  target={entry.target}
+                  values={entry.params ?? {}}
+                  onChange={(key, value) => setParam(entry.id, key, value)}
+                  disabled={busy || entry.status === 'done'}
+                />
+              )}
+            </>
           )}
 
           {active && <PlanSummary plan={active} />}
+
+          {/*
+            A file the shared target cannot serve has nowhere else to say so once the picker
+            is gone. This is not a fallback — nothing is being routed around — it is the same
+            refusal the per-file list would have given, in one line instead of a disclosure.
+          */}
+          {batch.enabled && batch.target && active && !active.feasible && (
+            <p
+              data-testid="batch-mismatch"
+              className="text-muted-foreground mt-3 flex items-start gap-1.5 text-xs"
+            >
+              <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                本批次的共享目标「{FORMATS[batch.target].label}」不适用于这个文件，它不会参与转换：
+                {active.impossibility
+                  ? IMPOSSIBILITY_COPY[active.impossibility.reason].body({
+                      reason: active.impossibility.reason,
+                      alternatives: [],
+                    })
+                  : '这台机器上没有可用的转换路径。'}
+              </span>
+            </p>
+          )}
 
           {active?.needsAcknowledgement && entry.status !== 'done' && (
             <label className="border-destructive/40 bg-destructive/5 mt-3 flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-xs">
@@ -338,62 +361,6 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   );
 }
 
-function TargetPicker({
-  feasible,
-  current,
-  familyOf,
-  onPick,
-  disabled,
-}: {
-  feasible: FormatId[];
-  current: FormatId | null;
-  familyOf: (t: FormatId) => string;
-  onPick: (t: FormatId) => void;
-  disabled: boolean;
-}) {
-  // Grouped so 17 targets read as a few meaningful clusters rather than a wall.
-  const groups = useMemo(() => {
-    const map = new Map<string, FormatId[]>();
-    for (const t of feasible) {
-      const family = familyOf(t);
-      const list = map.get(family) ?? [];
-      list.push(t);
-      map.set(family, list);
-    }
-    return [...map.entries()];
-  }, [feasible, familyOf]);
-
-  return (
-    <div className="mt-3 space-y-2">
-      {groups.map(([family, targets]) => (
-        <div key={family} className="flex flex-wrap items-center gap-1.5">
-          <span className="text-muted-foreground w-16 shrink-0 text-xs">
-            {FAMILY_LABELS[family] ?? family}
-          </span>
-          {targets.map((t) => (
-            <button
-              key={t}
-              type="button"
-              disabled={disabled}
-              onClick={() => onPick(t)}
-              aria-pressed={current === t}
-              className={cn(
-                'rounded-md border px-2 py-1 text-xs transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-50',
-                current === t
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border hover:bg-accent',
-              )}
-            >
-              {FORMATS[t].label}
-            </button>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function PlanSummary({ plan }: { plan: ReturnType<typeof planFor> }) {
   if (!plan.feasible) return null;
   return (
@@ -424,8 +391,8 @@ function StatusLine({ entry, copying }: { entry: FileEntry; copying: boolean }) 
         >
           {pct === null ? (
             // Indeterminate is a real state — the engine has not reported a ratio, and a
-            // fabricated percentage would be a lie. But the reason is only ever the one the
-            // engine gave us, and the caption says which.
+            // fabricated percentage would be a lie. But the reason is only ever the one
+            // the engine gave us; the caption says which.
             <div className="bg-primary h-full w-1/3 animate-pulse rounded-full" />
           ) : (
             <div
