@@ -30,6 +30,7 @@ import {
 import { changedParams, getFormat } from '../../core/registry/formats.ts';
 import { severityOf, type LossItem } from '../../core/loss/codes.ts';
 import type { FormatId } from '../../core/types.ts';
+import { primeAudioEncoder } from './extensions.ts';
 import {
   EngineError,
   outputNameFor,
@@ -196,6 +197,77 @@ function trackOptionsFor(
 }
 
 /**
+ * Make sure the audio this conversion will produce can actually be produced.
+ *
+ * MP3 and FLAC have no encoder in any browser, and AAC is missing on a good share of
+ * them; the extension packages supply one, and this is where they get their chance. It is
+ * skipped entirely when the source has no audio track — silence needs no encoder, and
+ * fetching a megabyte to encode nothing would be absurd.
+ */
+async function ensureAudioEncoder(
+  outputFormat: OutputFormat,
+  input: Input,
+  target: FormatId,
+  params: Readonly<Record<string, unknown>>,
+  onProgress?: EngineRequest['onProgress'],
+): Promise<void> {
+  const codecs = outputFormat.getSupportedAudioCodecs();
+  const tracks = await input.getAudioTracks();
+  const first = tracks[0];
+  if (codecs.length === 0 || !first) return;
+
+  // A copy needs no encoder, and Ogg → Ogg is a copy: fetching a megabyte to re-encode
+  // nothing would be absurd. This mirrors the engine's own rule for when a track has to
+  // be transcoded — the container cannot hold its codec, or the user asked for something
+  // different.
+  const chosenParams = changedParams(target, params);
+  const reEncodeRequested =
+    chosenParams.forceTranscode === true ||
+    chosenParams.codec !== undefined ||
+    chosenParams.quality !== undefined ||
+    chosenParams.bitrate !== undefined;
+
+  const sourceCodec = await first.getCodec().catch(() => null);
+  if (!reEncodeRequested && sourceCodec !== null && codecs.includes(sourceCodec as never)) {
+    return;
+  }
+
+  // The real channel count and sample rate are passed through because the extension
+  // encoders accept a limited set of each. A probe with default parameters can answer
+  // yes where the actual encode would answer no.
+  const [numberOfChannels, sampleRate] = await Promise.all([
+    first.getNumberOfChannels().catch(() => undefined),
+    first.getSampleRate().catch(() => undefined),
+  ]);
+
+  const chosen = await primeAudioEncoder({
+    codecs,
+    requested: chosenParams.codec,
+    ...(numberOfChannels && sampleRate ? { params: { numberOfChannels, sampleRate } } : {}),
+    onLoad: (codec) =>
+      onProgress?.({
+        phase: 'loading-engine',
+        ratio: undefined,
+        label: `${codec.toUpperCase()} 编码器扩展`,
+      }),
+  });
+
+  if (chosen) return;
+
+  // For a container that is nothing *but* audio there is no conversion left to perform,
+  // so saying so is the only useful answer. For a video container the soundtrack is one
+  // track among several, and the library dropping it is reported to the user as a loss
+  // rather than hidden here.
+  if (getFormat(target).family !== 'audio') return;
+
+  throw new EngineError(
+    `这个浏览器无法编码 ${getFormat(target).label} 需要的音频编码（${codecs.join('、')}），` +
+      '扩展编码器也没能加载。',
+    'unsupported',
+  );
+}
+
+/**
  * The primary engine: Mediabunny driving WebCodecs.
  *
  * Its default behaviour — copy the encoded packets when the target container can hold
@@ -239,6 +311,18 @@ export class MediabunnyEngine implements Engine {
 
     const target0 = new BufferTarget();
     const output = new Output({ format: outputFormat, target: target0 });
+
+    // Must happen before the conversion is planned: the library's own answer to "this
+    // container's audio cannot be encoded here" is to drop the track, and a video that
+    // arrives with its picture intact and its soundtrack missing is the kind of quiet
+    // loss this project exists to prevent.
+    await ensureAudioEncoder(
+      outputFormat,
+      mediaInput,
+      target,
+      params,
+      onProgress,
+    );
 
     let conversion: Conversion;
     try {
