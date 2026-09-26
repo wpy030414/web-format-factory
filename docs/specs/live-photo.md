@@ -62,11 +62,27 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 **Google Motion Photo（先做这一条——不需要兜底引擎）**
 
 1. 产出静图 JPEG。
+
+   **两个半张的来源取决于拖进来的是什么。** 散装视频只能交出第一帧；已有的 Live Photo
+   自带一张全分辨率静图，**能原样搬运就不重新编码**。把那张图丢掉、改用视频帧重拍一次，
+   等于把文件里最好的东西扔掉。若静图是 HEIC 则必须重新编码为 JPEG——Motion Photo 的元数据
+   只能写进 JPEG 的 APP1，而写 HEIC 的 XMP 要重写 `iinf`/`iloc`/`idat`，本项目不做；
+   这一处如实标注 `requantized`。
+
 2. 用主干引擎产出 MP4，`moov` 置于文件前部。
+
+   **视频同样能搬就搬**：源已经是 MP4 就一个字节不动（这也是唯一无损的那条），
+   是 MOV / WebM / MKV 才重封装——Google 的读取端期待 ISO-BMFF，
+   把 WebM 拼在 JPEG 后面的产物只有本项目自己读得懂。
+
 3. 手工构造 XMP 包，写入 JPEG 的 APP1，然后拼接 `jpeg || mp4`。
    `Camera:MicroVideoOffset` 写为 `mp4.length`（从末尾起算的语义），同时写 `Container:Directory` 形式。
 4. **自校验**：重新用识别器读一遍产物，断言 offset 可解析且指向合法 `ftyp`。
    自校验应当是任务的一部分，而不是留给测试。
+
+> 这条路**不需要兜底引擎**，因此也不需要跨源隔离，更不需要 31 MB 下载。
+> 两种形态都能满足需求时，它是代价低得多的那个——Apple 那条要动 ffmpeg，
+> 仅仅因为配对标识只能由 ffmpeg 写入。
 
 **Apple Live Photo**
 
@@ -82,7 +98,20 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
    `keys`/`ilst`，`ffprobe` 读不到，而且**不报错**。
    为什么不走主干引擎，见 `docs/DECISIONS.md` ADR-004——那里有一次被实测推翻的推断记录。
 
-3. 静图侧写入 `apple:ContentIdentifier` 到 XMP（手写，见下）。
+3. **静图侧标识不写**——与 `still-image-time` 同一类问题，只是更早一步被发现。
+
+   我们的探测器从静图 XMP 的 `apple:ContentIdentifier` 读取配对标识（`readStillIdentifier`）。
+   但两份相互独立的来源（LimitPoint 的 LivePhoto 库文档、那份被广泛转载的格式分析）都说
+   Apple 实际写在**静图的 EXIF MakerNote**（`kCGImagePropertyMakerAppleDictionary` 的 key 17），
+   而不是 XMP。
+
+   这意味着两件事，且都还没有定论：写出的 `.livp` 在静图那一侧没有标识；而**我们的读取端
+   可能一直在读一个 Apple 根本不写的字段**。若真是如此，一张真实的 Apple 静图与它的 MOV
+   会一路退到按文件名配对——而本项目自己的样本（`scripts/make-livephoto-fixtures.ts`）
+   恰好写了那个字段，所以往返测试**看不出这个差别**。这与本节末尾「一个诚实的局限」是同一个形状。
+
+   定论需要一份真实的 Apple 静图。**在那之前不照着改**——照着改只是用一个未经证实的字段
+   去替换另一个未经证实的字段，那正是 ADR-004 记录下来的错误。
 4. **`still-image-time` 轨道不写**——这是一个有意的决定，理由见 `docs/DECISIONS.md` ADR-009。
 
    已查实的是**语义**：一条定时元数据轨道，键为 `com.apple.quicktime.still-image-time`，
@@ -160,9 +189,10 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 | Apple `.livp` 识别与拆包 | ✅ |
 | Apple 成对识别与拆包 | ✅ |
 | Google Motion Photo 识别与拆包 | ✅ |
-| Google Motion Photo 生成 | ✅（封装层已实现，UI 入口待接） |
+| Google Motion Photo 生成 | ✅ 端到端；**不需要兜底引擎** |
 | Apple `.livp` 打包 | ✅（用于已打标的 MOV） |
 | Apple MOV 打标（content identifier） | ✅ 经兜底引擎写入，端到端已验证 |
+| Apple 静图侧标识 | ⛔ 不写；且读取端可能读错了字段，见上 |
 | 视频 → Live Photo（静帧取自视频首帧） | ✅ |
 | 多文件拖入的自动配对 | ✅ 优先按标识，退回文件名 |
 | 手动配对 / 解除配对 | ✅ 三种配对来源分别如实标注 |

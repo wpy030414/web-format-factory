@@ -61,6 +61,8 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - Live Photo：四种形态的识别与拆包、**从视频组装**（写入 Apple 配对标识）、
   **多文件拖入的自动配对**、**手动配对与解除配对**（三种配对来源分别如实标注）；
   导出静图时会剥掉已经失效的 Motion Photo 声明
+- Motion Photo（Google 的单文件形态）：由视频或已有 Live Photo 组装成一张尾部拼着 MP4 的 JPEG。
+  **不需要兜底引擎**，且现成的静图能原样搬运时绝不重新编码
 - 兜底引擎（ffmpeg.wasm）：按需加载、跨源隔离检测、WORKERFS 挂载，
   用于动态 WebP / APNG 编码、真 Vorbis 编码与 Live Photo 的配对标识写入
 - 编码参数界面：由各格式自己声明的参数表渲染，改设置会改变代价判定，并真的传到编码器
@@ -69,7 +71,7 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 诊断页 `#/capabilities`：实测本机的跨源隔离、编解码器可用性、原生 HEIC 支持，
   并翻译成「这对应用意味着什么」
 - 部署配置样例（`deploy/`）与一份无依赖的参考服务器（`scripts/serve-deploy.mjs`）
-- 测试：单元与集成 179 项；Playwright 端到端 45 项跑 dev server，另有 6 项跑**构建产物**
+- 测试：单元与集成 183 项；Playwright 端到端 48 项跑 dev server，另有 6 项跑**构建产物**
   （`pnpm test:e2e:prod`）。产物一律交给 ffprobe 校验
 
 ![能力诊断页](docs/screenshot-capabilities.png)
@@ -85,7 +87,10 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - **Apple 的 `still-image-time` 定时元数据轨道不写入**：语义已经查清，字节布局没有，
   而手上没有一份 Apple 亲自产出的 MOV 可作参照。理由与解锁条件见 `docs/DECISIONS.md`
   ADR-009——这是一次有意的取舍，不是遗漏。
-- Google Motion Photo 的**封装层**已实现且有往返自校验，但还没接上界面入口。
+- **Apple 静图那一侧的配对标识既不写、也可能读错了字段**：写出的 `.livp` 只有 MOV 一侧带标识；
+  而我们的探测器从静图的 XMP 读它，两份独立来源却说 Apple 写在 EXIF MakerNote 里。
+  若属实则真实 Apple 文件的配对会退到文件名——而本项目自造的样本恰好写了 XMP 那个字段，
+  所以往返测试看不出差别。定论需要一份真实 Apple 静图，详见 `docs/specs/live-photo.md`。
 - `deploy/` 下的 nginx / Caddy 样例**未经真实服务器验证**：写这份代码的机器上没有 nginx，
   也没有容器。行为面由参考服务器覆盖，配置面由单测覆盖，但两者之间仍有一段是推断。
 
