@@ -408,3 +408,54 @@ test.describe('动图转换', () => {
     expect(ffprobe(saved).codecs).toContain('mjpeg');
   });
 });
+
+test.describe('Live Photo', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  test('把 Motion Photo 识别为 Live Photo，而不是普通 JPEG', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'motionphoto.jpg');
+    // The whole point: it *is* a JPEG, and calling it one would hide the video half.
+    expect(await waitForClass(page)).toBe('Live Photo');
+  });
+
+  test('Motion Photo → MP4：取出视频那一半', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'motionphoto.jpg');
+    await waitForClass(page);
+
+    // Splitting a bundle drops the other half, so the plan must say projection rather
+    // than presenting it as an ordinary conversion.
+    await page.getByRole('button', { name: 'MP4', exact: true }).click();
+    await expect(page.getByTestId('plan-summary').getByText('投影')).toBeVisible();
+
+    const saved = await convertAndSave(page, 'MP4', 'out.mp4');
+    const probe = ffprobe(saved);
+    expect(probe.formatName).toContain('mp4');
+    expect(probe.codecs).toContain('h264');
+  });
+
+  test('Motion Photo → JPEG：导出静图，并剥掉已经失效的 Motion Photo 声明', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'motionphoto.jpg');
+    await waitForClass(page);
+
+    const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
+    expect(ffprobe(saved).codecs).toContain('mjpeg');
+
+    // The exported still must not keep claiming to contain a video it no longer has.
+    // A file that lies about its own contents is exactly what this project refuses.
+    const bytes = readFileSync(saved);
+    expect(bytes.includes(Buffer.from('Camera:MotionPhoto'))).toBe(false);
+    expect(bytes.includes(Buffer.from('Camera:MicroVideoOffset'))).toBe(false);
+  });
+
+  test('.livp → 视频：从压缩包里取出 MOV', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'pair.livp');
+    expect(await waitForClass(page)).toBe('Live Photo');
+
+    const saved = await convertAndSave(page, 'MP4', 'out.mp4');
+    expect(ffprobe(saved).codecs).toContain('h264');
+  });
+});

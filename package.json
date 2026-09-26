@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "fixtures": "bash scripts/gen-fixtures.sh"
+    "fixtures": "bash scripts/gen-fixtures.sh && node --experimental-strip-types scripts/make-livephoto-fixtures.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

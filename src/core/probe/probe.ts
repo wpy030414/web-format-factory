@@ -1,6 +1,7 @@
 import { ALL_FORMATS, BlobSource, Input, type InputTrack } from 'mediabunny';
 
 import type { ContainerId } from '../types.ts';
+import { detectMotionPhoto, unpackLivp } from '../../livephoto/detect.ts';
 import { classify } from './classify.ts';
 import type { AudioTrackInfo, MediaProfile, VideoTrackInfo } from './profile.ts';
 import {
@@ -55,6 +56,34 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
 
   if (sniffed.container === 'unknown') {
     return { ...base, unknownReason: '无法从文件内容识别出容器格式。' };
+  }
+
+  // A `.livp` is a ZIP of a still and a MOV. It is checked before anything else because
+  // its container says nothing about what the file actually is.
+  if (sniffed.container === 'zip') {
+    const archive = unpackLivp(await readAll(file));
+    if (!archive) {
+      return { ...base, unknownReason: '这个压缩包里没有找到配对的静图与视频。' };
+    }
+    return {
+      ...base,
+      mediaClass: 'live-photo',
+      livePhotoFlavor: archive.flavor,
+      ...(archive.issues.length > 0 ? { unknownReason: archive.issues.join('；') } : {}),
+    };
+  }
+
+  // A Google Motion Photo is a JPEG that is also a container. Its XMP claims are checked
+  // against the bytes before we believe them.
+  if (sniffed.container === 'jpeg') {
+    const motion = detectMotionPhoto(await readAll(file), 'jpeg');
+    if (motion) {
+      return {
+        ...base,
+        mediaClass: 'live-photo',
+        livePhotoFlavor: motion.flavor,
+      };
+    }
   }
 
   // Images carry their own metadata rather than a track structure.
@@ -112,6 +141,12 @@ export async function probe(file: File | Blob, name = 'file'): Promise<MediaProf
     // A parse failure is a fact about the file, not a crash.
     return { ...base, unknownReason: `容器解析失败：${(cause as Error).message}` };
   }
+}
+
+/** Read a whole file into memory. Used only by the Live Photo paths, which need the
+ * trailing bytes that a sniff window never reaches. */
+async function readAll(file: File | Blob): Promise<Uint8Array> {
+  return new Uint8Array(await file.arrayBuffer());
 }
 
 /**

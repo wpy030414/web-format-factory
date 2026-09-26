@@ -2,6 +2,7 @@
 import { MediabunnyEngine } from '../engines/mediabunny/index.ts';
 import { ImageEngine } from '../engines/image/index.ts';
 import { AnimationEngine } from '../engines/animation/index.ts';
+import { LivePhotoEngine } from '../engines/livephoto/index.ts';
 import { EngineError, type Engine, type EngineRequest, type JobProgress } from '../engines/types.ts';
 import { probe } from '../core/probe/probe.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
@@ -44,7 +45,14 @@ export type FromWorker =
     }
   | { type: 'error'; jobId: string; message: string; code: string };
 
-const engines: Engine[] = [new ImageEngine(), new MediabunnyEngine(), new AnimationEngine()];
+const engines: Engine[] = [
+  // Live Photo first: splitting a bundle has to happen before any generic handling,
+  // or an exported still would carry stale Motion Photo metadata along with it.
+  new LivePhotoEngine(),
+  new ImageEngine(),
+  new MediabunnyEngine(),
+  new AnimationEngine(),
+];
 
 /** Did this engine simply not recognise the source, rather than genuinely fail? */
 function isUnsupported(error: unknown): boolean {

@@ -136,3 +136,29 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 
 四种形态的识别与拆包、Google 形态的生成、Apple 形态的生成（标识配对 + 静帧 + MOV）
 全部可用；`still-image-time` 轨道作为已知增量缺口被文档化。
+
+## 当前实现状态
+
+| 能力 | 状态 |
+| --- | --- |
+| Apple `.livp` 识别与拆包 | ✅ |
+| Apple 成对识别与拆包 | ✅ |
+| Google Motion Photo 识别与拆包 | ✅ |
+| Google Motion Photo 生成 | ✅（封装层已实现，UI 入口待接） |
+| Apple `.livp` 打包 | ✅（用于已打标的 MOV） |
+| Apple MOV 打标（content identifier） | ⏳ 需要兜底引擎，尚未接入 |
+| `still-image-time` 定时元数据轨道 | ⏳ 已知缺口，见下 |
+
+### 打包器的自校验
+
+`buildMotionPhoto` 与 `buildLivp` **在返回前会用对应的探测器重新读一遍自己的产物**，
+不一致即抛错。一个「看起来对、但打不开」的 Live Photo 是最坏的结果，
+而探测器本来就在手边，这个检查几乎不花钱。
+
+### 一个诚实的局限
+
+测试样本由本项目自己的打包器产出，因此往返测试**无法发现打包器与探测器共享的误解**。
+单元测试通过直接断言格式规范里的字节级性质来补偿：
+`MicroVideoOffset` 是否等于视频长度、该偏移处是否确实以合法的视频容器开头、
+现代与旧版两套 XMP 字段是否都在。这些性质另用 `file` / `ffprobe` / `unzip`
+在外部工具上独立复核过。

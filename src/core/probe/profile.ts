@@ -1,4 +1,5 @@
 import type { ContainerId, MediaClass } from '../types.ts';
+import type { LivePhotoFlavor } from '../../livephoto/detect.ts';
 
 /**
  * The shape of what we know about an input file.
@@ -50,6 +51,13 @@ export interface MediaProfile {
   isAnimated?: boolean;
   /** Confirmed by an alpha-capable codec or an image format that supports it. */
   hasAlpha?: boolean;
+  /**
+   * Which Live Photo dialect this is, when the file turned out to be one.
+   *
+   * Just the name — the halves themselves are re-derived on demand from the bytes, which
+   * is cheap, rather than shipped across the worker boundary inside every profile.
+   */
+  livePhotoFlavor?: LivePhotoFlavor;
 
   /** Why the class is `unknown`, when it is — shown to the user verbatim. */
   unknownReason?: string;
