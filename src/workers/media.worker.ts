@@ -3,6 +3,7 @@ import { MediabunnyEngine } from '../engines/mediabunny/index.ts';
 import { ImageEngine } from '../engines/image/index.ts';
 import { AnimationEngine } from '../engines/animation/index.ts';
 import { LivePhotoEngine } from '../engines/livephoto/index.ts';
+import { FfmpegEngine } from '../engines/ffmpeg/index.ts';
 import { EngineError, type Engine, type EngineRequest, type JobProgress } from '../engines/types.ts';
 import { probe } from '../core/probe/probe.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
@@ -52,6 +53,9 @@ const engines: Engine[] = [
   new ImageEngine(),
   new MediabunnyEngine(),
   new AnimationEngine(),
+  // Last resort: 32 MB and an order of magnitude slower. Only the operations nothing
+  // else can do are routed here — see docs/specs/engine-routing.md.
+  new FfmpegEngine(),
 ];
 
 /** Did this engine simply not recognise the source, rather than genuinely fail? */
@@ -83,6 +87,30 @@ async function runWithFallback(request: EngineRequest): Promise<Awaited<ReturnTy
   throw unsupported instanceof Error
     ? unsupported
     : new EngineError(`没有引擎可以输出 ${request.target}`, 'unsupported');
+}
+
+/**
+ * Extract something a person can act on from whatever was thrown.
+ *
+ * A narrow `error.message` read loses everything when the thrown value is not an Error —
+ * a library rejecting with a string, or a `DOMException` whose message is empty — and the
+ * user is left with "the conversion failed" and no way to find out why.
+ */
+function describeError(cause: unknown): { message: string; code: string } {
+  const code = (cause as { code?: string })?.code ?? 'unknown';
+
+  if (cause instanceof Error && cause.message) return { message: cause.message, code };
+  if (typeof cause === 'string' && cause.trim()) return { message: cause, code };
+
+  try {
+    const json = JSON.stringify(cause);
+    if (json && json !== '{}') return { message: json, code };
+  } catch {
+    // Circular or otherwise unserialisable; fall through to String().
+  }
+
+  const text = String(cause).trim();
+  return { message: text || '转换失败，且未能取得具体原因', code };
 }
 
 /** One AbortController per in-flight job, so cancellation is precise. */
@@ -133,13 +161,8 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
       extraLosses: result.extraLosses ?? [],
     });
   } catch (cause) {
-    const error = cause as { message?: string; code?: string };
-    post({
-      type: 'error',
-      jobId,
-      message: error.message ?? '转换失败',
-      code: error.code ?? 'unknown',
-    });
+    const described = describeError(cause);
+    post({ type: 'error', jobId, message: described.message, code: described.code });
   } finally {
     controllers.delete(jobId);
   }

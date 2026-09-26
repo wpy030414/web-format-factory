@@ -166,6 +166,15 @@ importers:
 
   .:
     dependencies:
+      '@ffmpeg/core-mt':
+        specifier: 0.12.10
+        version: 0.12.10
+      '@ffmpeg/ffmpeg':
+        specifier: 0.12.15
+        version: 0.12.15
+      '@ffmpeg/util':
+        specifier: 0.12.2
+        version: 0.12.2
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -742,6 +751,22 @@ packages:
   '@babel/types@7.29.8':
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
+
+  '@ffmpeg/core-mt@0.12.10':
+    resolution: {integrity: sha512-atyRTOpa58bLCIgd6GXBZAXWyWD3AUoQyzxqjvGhp9MuSzdILtOTI62ffLswBsCnLq15lQ8IETHUpm1oe4V9FQ==}
+    engines: {node: '>=16.x'}
+
+  '@ffmpeg/ffmpeg@0.12.15':
+    resolution: {integrity: sha512-1C8Obr4GsN3xw+/1Ww6PFM84wSQAGsdoTuTWPOj2OizsRDLT4CXTaVjPhkw6ARyDus1B9X/L2LiXHqYYsGnRFw==}
+    engines: {node: '>=18.x'}
+
+  '@ffmpeg/types@0.12.4':
+    resolution: {integrity: sha512-k9vJQNBGTxE5AhYDtOYR5rO5fKsspbg51gbcwtbkw2lCdoIILzklulcjJfIDwrtn7XhDeF2M+THwJ2FGrLeV6A==}
+    engines: {node: '>=16.x'}
+
+  '@ffmpeg/util@0.12.2':
+    resolution: {integrity: sha512-ouyoW+4JB7WxjeZ2y6KpRvB+dLp7Cp4ro8z0HIVpZVCM7AwFlHa0c4R8Y/a4M3wMqATpYKhC7lSFHQ0T11MEDw==}
+    engines: {node: '>=18.x'}
 
   '@isaacs/cliui@9.0.0':
     resolution: {integrity: sha512-AokJm4tuBHillT+FpMtxQ60n8ObyXBatq7jD2/JA9dxbDDokKQm8KMht5ibGzLVU9IJDIKK4TPKgMHEYMn3lMg==}
@@ -3264,6 +3289,16 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
+
+  '@ffmpeg/core-mt@0.12.10': {}
+
+  '@ffmpeg/ffmpeg@0.12.15':
+    dependencies:
+      '@ffmpeg/types': 0.12.4
+
+  '@ffmpeg/types@0.12.4': {}
+
+  '@ffmpeg/util@0.12.2': {}
 
   '@isaacs/cliui@9.0.0': {}
 

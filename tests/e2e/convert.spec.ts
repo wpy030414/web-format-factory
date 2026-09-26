@@ -459,3 +459,77 @@ test.describe('Live Photo', () => {
     expect(ffprobe(saved).codecs).toContain('h264');
   });
 });
+
+test.describe('兜底引擎', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  // This is the only route in the project that needs the 32 MB fallback core, so the
+  // first job here pays for downloading and instantiating it. On a dev server the wasm
+  // arrives from localhost in well under a second — do not read that as representative
+  // of a real network. The generous timeout is for slow machines and CI.
+  test.setTimeout(300_000);
+
+  test('动态 WebP 编码：这条路由只有兜底引擎能做', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.webm');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Animated WebP', exact: true }).click();
+    await page.getByRole('button', { name: /开始转换/ }).click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
+    await expect(downloadButton).toHaveText(/\.webp$/);
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.webp');
+    await download.saveAs(saved);
+
+    // `webp_anim`, not `webp`: a still image would mean the animation was dropped.
+    expect(ffprobe(saved).codecs).toContain('webp_anim');
+  });
+
+  test('组装 Live Photo：把视频做成一个带配对标识的 .livp', async ({ page }) => {
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Live Photo', exact: true }).click();
+    await page.getByRole('button', { name: /开始转换/ }).click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
+    await expect(downloadButton).toHaveText(/\.livp$/);
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await downloadButton.click();
+    const download = await downloadPromise;
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const saved = join(dir, 'out.livp');
+    await download.saveAs(saved);
+
+    // Verify with tools that share no code with ours: unzip the archive, then ask
+    // ffprobe whether the video half really carries Apple's pairing identifier.
+    const listing = execFileSync('unzip', ['-l', saved], { encoding: 'utf8' });
+    expect(listing).toMatch(/\.jpg/);
+    expect(listing).toMatch(/\.mov/);
+
+    execFileSync('unzip', ['-o', '-q', saved, '-d', dir]);
+    const movName = execFileSync('bash', ['-c', `cd ${dir} && ls *.mov`], { encoding: 'utf8' }).trim();
+    const tags = execFileSync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', join(dir, movName)],
+      { encoding: 'utf8' },
+    );
+    // Without this tag the two halves are not a pair, and no Apple device would treat
+    // the result as a Live Photo.
+    expect(tags).toContain('com.apple.quicktime.content.identifier');
+  });
+});

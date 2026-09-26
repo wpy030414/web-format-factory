@@ -6,16 +6,20 @@
   "packageManager": "pnpm@12.4.0",
   "description": "Local, in-browser multimedia format converter. Files never leave the device.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/copy-engines.mjs && vite",
+    "build": "node scripts/copy-engines.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "fixtures": "bash scripts/gen-fixtures.sh && node --experimental-strip-types scripts/make-livephoto-fixtures.ts"
+    "fixtures": "bash scripts/gen-fixtures.sh && node --experimental-strip-types scripts/make-livephoto-fixtures.ts",
+    "engines": "node scripts/copy-engines.mjs"
   },
   "dependencies": {
+    "@ffmpeg/core-mt": "0.12.10",
+    "@ffmpeg/ffmpeg": "0.12.15",
+    "@ffmpeg/util": "0.12.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",

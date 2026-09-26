@@ -146,7 +146,8 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 | Google Motion Photo 识别与拆包 | ✅ |
 | Google Motion Photo 生成 | ✅（封装层已实现，UI 入口待接） |
 | Apple `.livp` 打包 | ✅（用于已打标的 MOV） |
-| Apple MOV 打标（content identifier） | ⏳ 需要兜底引擎，尚未接入 |
+| Apple MOV 打标（content identifier） | ✅ 经兜底引擎写入，端到端已验证 |
+| 视频 → Live Photo（静帧取自视频首帧） | ✅ |
 | `still-image-time` 定时元数据轨道 | ⏳ 已知缺口，见下 |
 
 ### 打包器的自校验
