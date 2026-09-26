@@ -611,6 +611,59 @@ test.describe('Live Photo', () => {
     expect(await waitForClass(page)).toBe('Live Photo');
     await expect(page.getByTestId('pairing-note')).toContainText('按文件名配对');
   });
+
+  test('解除配对：把合成的那一个拆回两个原始文件', async ({ page }) => {
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'pair-tagged.jpg', as: 'pair-tagged.jpg' },
+      { fixture: 'pair-tagged.mov', as: 'pair-tagged.mov' },
+    ]);
+    await expect(page.getByTestId('media-class')).toHaveCount(1, { timeout: 30_000 });
+    expect(await waitForClass(page)).toBe('Live Photo');
+
+    await page.getByTestId('unpair').click();
+
+    // Two entries again, each identified on its own merits. A filename match is a guess,
+    // and a guess the user cannot undo is worse than no pairing at all.
+    await expect(page.getByTestId('media-class')).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.getByTestId('pairing-note')).toHaveCount(0);
+
+    const classes = (await page.getByTestId('media-class').allTextContents()).map((t) => t.trim());
+    expect(classes.sort()).toEqual(['静态图像', '视频'].sort());
+
+    // The originals, not a re-derivation of them — the filenames are the evidence that
+    // the exact files came back. Asserted through the remove buttons because those are
+    // addressed by the filename: the still card also offers to pair the video back up,
+    // and that button carries the same text.
+    await expect(page.getByRole('button', { name: '移除 pair-tagged.jpg', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '移除 pair-tagged.mov', exact: true })).toBeVisible();
+  });
+
+  test('手动配对：自动配对认不出的两个文件，由用户指定', async ({ page }) => {
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'still.jpg', as: 'frame.jpg' },
+      { fixture: 'av.mp4', as: 'clip.mp4' },
+    ]);
+
+    // Nothing links these two — different names, no shared identifier — so the automatic
+    // pass is right to leave them alone, and the user is the one who knows better.
+    await expect(page.getByTestId('media-class')).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.getByTestId('pairing-note')).toHaveCount(0);
+
+    // `exact` matters: the remove button's accessible name is "移除 clip.mp4", which a
+    // substring match would also hit.
+    await page.getByRole('button', { name: 'clip.mp4', exact: true }).click();
+
+    await expect(page.getByTestId('media-class')).toHaveCount(1, { timeout: 30_000 });
+    expect(await waitForClass(page)).toBe('Live Photo');
+    await expect(page.getByTestId('pairing-note')).toContainText('由你指定');
+
+    // And it has to work end to end — joining two cards into one, with the result
+    // unusable, would be worse than leaving them apart.
+    const saved = await convertAndSave(page, 'JPEG', 'out.jpg');
+    expect(ffprobe(saved).codecs).toContain('mjpeg');
+  });
 });
 
 test.describe('编码参数', () => {

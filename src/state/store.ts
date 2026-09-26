@@ -28,9 +28,19 @@ export interface FileEntry {
    * Set when this entry was assembled from two dropped files.
    *
    * The pairing resolution matters to show: matching on Apple's identifier is evidence,
-   * matching on the filename is a guess, and the user deserves to know which one they got.
+   * matching on the filename is a guess, and a user deciding whether to trust the pairing
+   * deserves to know which one they got.
+   *
+   * The two originals are kept rather than only their names, so that unpairing restores
+   * exactly what was dropped instead of a re-derivation of it. The cost is holding a Live
+   * Photo's bytes twice, which for a format measured in megabytes is worth paying for a
+   * reversible action.
    */
-  paired?: { still: string; video: string; matchedBy: 'identifier' | 'filename' };
+  paired?: {
+    still: File;
+    video: File;
+    matchedBy: 'identifier' | 'filename' | 'manual';
+  };
 }
 
 interface State {
@@ -48,6 +58,10 @@ interface State {
   cancelAll: () => void;
   planForFile: (id: string) => ResolvedPlan | null;
   downloadAll: () => void;
+  /** Join two loose halves into one Live Photo, on the user's say-so. */
+  pairManually: (stillId: string, videoId: string) => Promise<void>;
+  /** Take a Live Photo back apart into the two files it was made from. */
+  unpair: (id: string) => Promise<void>;
 }
 
 /** Keeps the UI responsive without starting a fight over memory or the GPU encoder. */
@@ -150,54 +164,76 @@ export const useStore = create<State>((set, get) => {
     });
   };
 
+  /** Put a fresh entry into the list and fill in its profile as the worker answers. */
+  const probeEntries = async (entries: FileEntry[]): Promise<void> => {
+    set((s) => ({ files: [...s.files, ...entries] }));
+
+    // Probing runs in the worker — it needs the media library, which must not be pulled
+    // into the entry chunk. Each card updates as its own result lands.
+    const client = engine();
+    await Promise.all(
+      entries.map(async (entry) => {
+        try {
+          const profile = await client.probe(entry.file, entry.file.name);
+          set((s) => ({
+            files: s.files.map((f) =>
+              f.id === entry.id
+                ? {
+                    ...f,
+                    profile,
+                    status: 'ready',
+                    // Preselect a sensible target, or leave it null when nothing is
+                    // feasible so the user sees the refusals rather than a guess.
+                    ...seedTarget(f, profile),
+                  }
+                : f,
+            ),
+          }));
+        } catch (cause) {
+          const { message } = asEngineError(cause);
+          set((s) => ({
+            files: s.files.map((f) =>
+              f.id === entry.id ? { ...f, status: 'error', error: message } : f,
+            ),
+          }));
+        }
+      }),
+    );
+  };
+
   return {
     files: [],
     running: 0,
     engine: null,
 
     async addFiles(incoming) {
-      const entries: FileEntry[] = incoming.map((file) => ({
-        id: nextId(),
-        file,
-        profile: null,
-        status: 'probing',
-        target: null,
-      }));
-      set((s) => ({ files: [...s.files, ...entries] }));
-
-      // Probing runs in the worker — it needs the media library, which must not be
-      // pulled into the entry chunk. Each card updates as its own result lands.
-      const client = engine();
-      await Promise.all(
-        entries.map(async (entry) => {
-          try {
-            const profile = await client.probe(entry.file, entry.file.name);
-            set((s) => ({
-              files: s.files.map((f) =>
-                f.id === entry.id
-                  ? {
-                      ...f,
-                      profile,
-                      status: 'ready',
-                      // Preselect a sensible target, or leave it null when nothing is
-                      // feasible so the user sees the refusals rather than a guess.
-                      ...seedTarget(f, profile),
-                    }
-                  : f,
-              ),
-            }));
-          } catch (cause) {
-            const { message } = asEngineError(cause);
-            set((s) => ({
-              files: s.files.map((f) =>
-                f.id === entry.id ? { ...f, status: 'error', error: message } : f,
-              ),
-            }));
-          }
-        }),
-      );
-
+      await probeEntries(incoming.map(newEntry));
       await pairDroppedFiles(set, get);
+    },
+
+    async pairManually(stillId, videoId) {
+      const state = get();
+      const still = state.files.find((f) => f.id === stillId);
+      const video = state.files.find((f) => f.id === videoId);
+      // Only two loose, unpaired, ready files can be joined; anything else means the card
+      // moved under the click and the right answer is to do nothing rather than guess.
+      if (!still || !video || still.paired || video.paired) return;
+      if (still.status !== 'ready' || video.status !== 'ready') return;
+
+      await mergePair(set, still, video, 'manual');
+    },
+
+    async unpair(id) {
+      const entry = get().files.find((f) => f.id === id);
+      const halves = entry?.paired;
+      if (!entry || !halves) return;
+
+      // Put the two originals back and probe them again from scratch. Carrying anything
+      // over from the merged card would be wrong: a Live Photo entry has one target and
+      // one set of parameters, and neither means anything for a loose JPEG and a loose
+      // MOV — that is precisely why they were merged into one in the first place.
+      set((s) => ({ files: s.files.filter((f) => f.id !== id) }));
+      await probeEntries([newEntry(halves.still), newEntry(halves.video)]);
     },
 
     removeFile(id) {
@@ -281,16 +317,17 @@ export const useStore = create<State>((set, get) => {
   };
 });
 
+function newEntry(file: File): FileEntry {
+  return { id: nextId(), file, profile: null, status: 'probing', target: null };
+}
+
 /**
  * Look for Live Photo pairs among the entries and merge each pair into one.
  *
  * A Live Photo arrives from most tools as two loose files, and showing them as two
  * unrelated entries invites the user to convert each half separately — which is exactly
- * what they did not mean.
- *
- * Rather than teach every downstream layer about pairs, a matched pair is assembled into
- * a `.livp` in memory and treated as one input. The pipeline already understands that
- * shape, so nothing below this line has to change.
+ * what they did not mean. What this cannot do is pair two files whose identifiers disagree
+ * and whose names differ; that is what the manual pairing on the card is for.
  */
 async function pairDroppedFiles(
   set: (fn: (s: State) => Partial<State>) => void,
@@ -312,45 +349,62 @@ async function pairDroppedFiles(
     const stillEntry = entries[candidates.indexOf(group.still)];
     const videoEntry = entries[candidates.indexOf(group.video)];
     if (!stillEntry || !videoEntry) continue;
+    await mergePair(set, stillEntry, videoEntry, group.matchedBy);
+  }
+}
 
-    try {
-      const still = new Uint8Array(await stillEntry.file.arrayBuffer());
-      const video = new Uint8Array(await videoEntry.file.arrayBuffer());
-      const { bytes } = buildLivp(still, video);
+/**
+ * Assemble two halves into one Live Photo.
+ *
+ * Rather than teach every downstream layer about pairs, the two files are zipped into a
+ * `.livp` in memory and treated as a single input. The pipeline already understands that
+ * shape, so nothing below this line has to change.
+ *
+ * @returns whether the two were successfully joined.
+ */
+async function mergePair(
+  set: (fn: (s: State) => Partial<State>) => void,
+  stillEntry: FileEntry,
+  videoEntry: FileEntry,
+  matchedBy: 'identifier' | 'filename' | 'manual',
+): Promise<boolean> {
+  try {
+    const still = new Uint8Array(await stillEntry.file.arrayBuffer());
+    const video = new Uint8Array(await videoEntry.file.arrayBuffer());
+    const { bytes } = buildLivp(still, video);
 
-      const id = stillEntry.id;
-      set((s) => ({
-        files: s.files
-          .filter((f) => f.id !== videoEntry.id)
-          .map((f) =>
-            f.id === id
-              ? {
-                  ...f,
-                  file: new File([bytes as BlobPart], `${baseNameOf(stillEntry.file.name)}.livp`),
-                  profile: {
-                    name: `${baseNameOf(stillEntry.file.name)}.livp`,
-                    size: bytes.length,
-                    container: 'zip' as const,
-                    mediaClass: 'live-photo' as const,
-                    livePhotoFlavor: 'apple-paired' as const,
-                    videoTracks: [],
-                    audioTracks: [],
-                    otherTrackCount: 0,
-                  },
-                  target: f.target ?? 'mp4',
-                  paired: {
-                    still: stillEntry.file.name,
-                    video: videoEntry.file.name,
-                    matchedBy: group.matchedBy,
-                  },
-                }
-              : f,
-          ),
-      }));
-    } catch {
-      // If the two will not zip together, leave them as separate entries rather than
-      // dropping them — the user can still convert each half on its own.
-    }
+    const id = stillEntry.id;
+    const name = `${baseNameOf(stillEntry.file.name)}.livp`;
+
+    set((s) => ({
+      files: s.files
+        .filter((f) => f.id !== videoEntry.id)
+        .map((f) =>
+          f.id === id
+            ? {
+                ...f,
+                file: new File([bytes as BlobPart], name),
+                profile: {
+                  name,
+                  size: bytes.length,
+                  container: 'zip' as const,
+                  mediaClass: 'live-photo' as const,
+                  livePhotoFlavor: 'apple-paired' as const,
+                  videoTracks: [],
+                  audioTracks: [],
+                  otherTrackCount: 0,
+                },
+                target: f.target ?? 'mp4',
+                paired: { still: stillEntry.file, video: videoEntry.file, matchedBy },
+              }
+            : f,
+        ),
+    }));
+    return true;
+  } catch {
+    // If the two will not zip together, leave them as separate entries rather than
+    // dropping them — the user can still convert each half on its own.
+    return false;
   }
 }
 

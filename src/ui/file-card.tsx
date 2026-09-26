@@ -8,6 +8,7 @@ import {
   CircleAlert,
   CircleCheck,
   Link2,
+  Unlink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
 import { FORMATS } from '@/core/registry/formats.ts';
@@ -33,6 +34,9 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   const removeFile = useStore((s) => s.removeFile);
   const acknowledge = useStore((s) => s.acknowledge);
   const setParam = useStore((s) => s.setParam);
+  const unpair = useStore((s) => s.unpair);
+  const pairManually = useStore((s) => s.pairManually);
+  const allFiles = useStore((s) => s.files);
   const [showImpossible, setShowImpossible] = useState(false);
 
   const plans = useMemo(
@@ -61,6 +65,29 @@ export function FileCard({ entry }: { entry: FileEntry }) {
   }, [impossible]);
 
   const busy = entry.status === 'running' || entry.status === 'queued';
+
+  /**
+   * Loose videos this still could be joined to.
+   *
+   * Read from the whole list rather than passed in, because the answer is a property of
+   * the list — it changes as other cards are added, paired or removed — and a card that
+   * only knew about itself would offer a pairing that no longer applies.
+   */
+  const pairCandidates = useMemo(
+    () =>
+      entry.profile?.mediaClass === 'still-image' && !entry.paired
+        ? allFiles.filter(
+            (f) =>
+              f.id !== entry.id &&
+              !f.paired &&
+              f.status === 'ready' &&
+              (f.profile?.container === 'isobmff-mov' ||
+                f.profile?.container === 'isobmff-mp4') &&
+              (f.profile?.videoTracks.length ?? 0) > 0,
+          )
+        : [],
+    [allFiles, entry.id, entry.profile?.mediaClass, entry.paired],
+  );
 
   return (
     <li className="border-border bg-card rounded-xl border p-4">
@@ -101,25 +128,72 @@ export function FileCard({ entry }: { entry: FileEntry }) {
       </div>
 
       {/*
-        Say how the two halves were matched. An identifier match is evidence; a filename
+        Say how the two halves were matched. An identifier match is evidence, a filename
         match is a guess, and a user deciding whether to trust the pairing deserves to
-        know which one they got.
+        know which one they got — including when they are the one who said so.
       */}
       {entry.paired && (
-        <p
-          data-testid="pairing-note"
-          className="text-muted-foreground mt-2 flex items-start gap-1.5 text-xs"
-        >
-          <Link2 className="mt-0.5 size-3 shrink-0" />
-          <span>
-            已把 <span className="text-foreground">{entry.paired.still}</span> 与{' '}
-            <span className="text-foreground">{entry.paired.video}</span> 合成一个 Live Photo
-            {entry.paired.matchedBy === 'identifier'
-              ? '（两者携带相同的配对标识）'
-              : '（按文件名配对，未能确认标识）'}
-            。
-          </span>
-        </p>
+        <div className="mt-2 flex items-start justify-between gap-3">
+          <p
+            data-testid="pairing-note"
+            className="text-muted-foreground flex items-start gap-1.5 text-xs"
+          >
+            <Link2 className="mt-0.5 size-3 shrink-0" />
+            <span>
+              已把 <span className="text-foreground">{entry.paired.still.name}</span> 与{' '}
+              <span className="text-foreground">{entry.paired.video.name}</span> 合成一个 Live
+              Photo
+              {entry.paired.matchedBy === 'identifier'
+                ? '（两者携带相同的配对标识）'
+                : entry.paired.matchedBy === 'manual'
+                  ? '（由你指定）'
+                  : '（按文件名配对，未能确认标识）'}
+              。
+            </span>
+          </p>
+
+          {/*
+            Unpairing has to be reachable, and it is the reason the two originals are kept
+            rather than only their names: a filename match is a guess, and a guess the user
+            cannot undo is worse than no pairing at all. It also has to be here rather than
+            in a menu — the moment you realise the pairing is wrong is the moment you are
+            reading the sentence that says what it paired.
+          */}
+          <button
+            type="button"
+            data-testid="unpair"
+            disabled={busy}
+            onClick={() => void unpair(entry.id)}
+            className="text-muted-foreground hover:text-foreground inline-flex shrink-0 items-center gap-1 text-xs disabled:opacity-40"
+          >
+            <Unlink className="size-3" />
+            拆开
+          </button>
+        </div>
+      )}
+
+      {/*
+        Pairing by hand, for the two files the automatic pass could not match: identifiers
+        that disagree and names that differ. Offered only where it can work — a still image
+        that is not already spoken for, with at least one loose video to join it to.
+      */}
+      {!entry.paired && entry.profile?.mediaClass === 'still-image' && pairCandidates.length > 0 && (
+        <div className="text-muted-foreground mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <Link2 className="size-3 shrink-0" />
+          <span>与视频合成 Live Photo：</span>
+          {pairCandidates.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              data-testid={`pair-with-${candidate.id}`}
+              disabled={busy}
+              onClick={() => void pairManually(entry.id, candidate.id)}
+              className="border-border hover:bg-accent text-foreground rounded border px-1.5 py-0.5 disabled:opacity-40"
+            >
+              {candidate.file.name}
+            </button>
+          ))}
+        </div>
       )}
 
       {/* An unidentifiable file gets an explanation, not an empty picker. */}
