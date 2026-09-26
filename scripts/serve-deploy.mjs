@@ -3,18 +3,24 @@
  * A reference implementation of what `deploy/nginx.conf.sample` promises.
  *
  * Why this exists: the deployment config is a file nobody can test on a machine without
- * nginx, and its two load-bearing properties — the cross-origin isolation headers and the
- * `application/wasm` MIME type — fail *silently* when they go missing. `FFmpeg.load()`
- * neither resolves nor rejects without the headers; `WebAssembly.instantiateStreaming`
- * rejects on a mislabelled wasm response and the fallback engine is simply never there.
+ * nginx, and its load-bearing properties — the cross-origin isolation headers and the MIME
+ * types — fail *silently* when they go missing. `FFmpeg.load()` neither resolves nor
+ * rejects without the headers; a module worker served as the wrong type never executes,
+ * and the fallback engine is simply never there.
  *
  * So the end-to-end suite runs against this instead, and what that buys is precise:
  * the built artifact is proven to work *under these response semantics*. It does **not**
- * prove that nginx emits them. No tool on this machine can prove that, and pretending
- * otherwise would be exactly the kind of unverified assumption this project keeps
- * catching itself making. What closes the remaining gap is
- * `tests/unit/deploy-config.test.ts`, which asserts the config file still says these
- * things — so the two halves cannot drift apart without one of them failing.
+ * prove that nginx emits them — and that gap stopped being theoretical on 2026-09-26, when
+ * the sample went onto a real nginx and served `/engines/ffmpeg/const.js` as
+ * `application/octet-stream` while every check in this repository stayed green. The reason
+ * is structural: this server's MIME table is one hand-written map covering the whole
+ * origin, whereas nginx keeps the map per context and a `types` block in a `location`
+ * *replaces* the inherited one. A config bug of that shape cannot appear here at all, so
+ * a green run here can never rule it out. See `docs/DECISIONS.md` ADR-012.
+ *
+ * What closes the remaining gap is `tests/unit/deploy-config.test.ts`, now asserting the
+ * *rule* that broke instead of the directive that was missing — read that header for what
+ * it still cannot prove.
  *
  * Deliberately dependency-free: a server that needs installing is a server that will not
  * be run.

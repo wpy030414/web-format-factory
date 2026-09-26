@@ -31,6 +31,9 @@ format.example.com {
 	header @sw Cache-Control "no-cache, no-store, must-revalidate"
 
 	# wasm 的 MIME 类型 Caddy 已内置，无需额外声明。
+	# 这不是风格差异：Caddy 的 MIME 表是全局的，不存在 nginx 那种
+	# 「某个路径声明了 types 就把继承来的整张表换掉」的坑（见 DECISIONS.md ADR-012）。
+	# 所以别照着 nginx 那份往这里补 MIME 声明——那份是被真机咬过之后才补的。
 
 	# 哈希路由，不需要 SPA 重写；若要支持真实路径再加 try_files。
 	try_files {path} /index.html

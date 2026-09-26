@@ -96,8 +96,12 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
   而我们的探测器从静图的 XMP 读它，两份独立来源却说 Apple 写在 EXIF MakerNote 里。
   若属实则真实 Apple 文件的配对会退到文件名——而本项目自造的样本恰好写了 XMP 那个字段，
   所以往返测试看不出差别。定论需要一份真实 Apple 静图，详见 `docs/specs/live-photo.md`。
-- `deploy/` 下的 nginx / Caddy 样例**未经真实服务器验证**：写这份代码的机器上没有 nginx，
-  也没有容器。行为面由参考服务器覆盖，配置面由单测覆盖，但两者之间仍有一段是推断。
+- `deploy/` 下的 nginx 样例已经在真机上跑过一次（2026-09-26，nginx/1.28.3 Ubuntu），
+  而真机咬到的第一口正是参考服务器**结构上覆盖不到**的那类：`location /engines/` 里那句
+  `types { application/wasm wasm; }` 会把继承来的整张 MIME 表**换掉**，`.js` 因此以
+  `application/octet-stream` 下发，浏览器拒绝执行它，兜底引擎又是一个「停在转换中」。
+  已修，理由与证据见 `docs/DECISIONS.md` ADR-012。Caddy 那份仍未上过真机；
+  行为面由参考服务器覆盖，配置面由单测覆盖，两者之间剩下的仍是推断。
 
 ## 核心技术
 

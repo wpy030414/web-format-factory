@@ -1,8 +1,23 @@
 # Web Format Factory — nginx 站点配置示例
 #
-# 这个文件不是「顺手附上的参考」，其中两条响应头是功能性的：
-# 少了它们，兜底引擎（ffmpeg.wasm）不会报错，而是**静默挂起**。
-# 症状是点了转换之后界面卡在「转换中」永不结束——所以请照抄，不要凭印象省。
+# 这个文件不是「顺手附上的参考」。下面两处是功能性的，缺了它们兜底引擎
+# （ffmpeg.wasm）不会报错，而是**静默挂起**：点了转换之后界面卡在「转换中」永不结束。
+#
+#   1. 三个跨源隔离响应头（COOP/COEP/CORP）。缺了 `FFmpeg.load()` 既不 resolve 也不 reject。
+#   2. 兜底引擎资源的 MIME。坑在 `location /engines/` 的那段注释里：location 层的
+#      `types` 是**替换**而不是叠加，想补一条 wasm 会顺手把 `.js` 的映射一起吃掉。
+#
+# 两条都在真机上咬过人，且都是「没有报错的那种坏」。所以请照抄，不要凭印象省。
+#
+# 部署后自检（改完配置、reload nginx 之后跑一遍，错的那条会直接暴露）：
+#
+#   curl -sI https://你的域名/engines/ffmpeg/const.js | grep -i content-type
+#   #    期望 application/javascript。若是 application/octet-stream，
+#   #    就是 `location /engines/` 的 types 块少了 js 映射。
+#   curl -sI https://你的域名/engines/ffmpeg/ffmpeg-core.wasm | grep -i content-type
+#   #    期望 application/wasm
+#   curl -sI https://你的域名/ | grep -i cross-origin-embedder-policy
+#   #    期望 require-corp
 
 server {
     listen 443 ssl;
@@ -69,8 +84,31 @@ server {
     # 若想彻底避免这个问题，可在构建期给这些文件加上版本目录，
     # 例如 /engines/ffmpeg-0.12.10/ffmpeg-core.wasm。
     location /engines/ {
+        # ---------------------------------------------------------------- MIME
+        #
+        # 这个 types 块**不是**「补一条 wasm」——它是把整张映射表**换掉**。
+        #
+        # nginx 的扩展名映射按层各存一份，合并时只在本层没有自己的 types 时才继承上层
+        # （`ngx_http_core_module.c`：`if (conf->types == NULL) { conf->types = prev->types; … }`）。
+        # 于是这里一写 types，从 http 层 `include mime.types;` 继承来的
+        # js → application/javascript 就没了；没列出的扩展名一律落到 default_type，
+        # 而 Ubuntu 的 nginx.conf 把它设成 application/octet-stream。
+        #
+        # 症状：/engines/ffmpeg/const.js 以 application/octet-stream 下发，浏览器拒绝
+        # 把它当模块脚本执行——
+        #   TypeError: 'application/octet-stream' is not a valid JavaScript MIME type
+        # 而 ffmpeg.wasm 的 class worker 是 module worker（worker.js 里 import './const.js'），
+        # 于是 `FFmpeg.load()` 又是既不 resolve 也不 reject，界面停在「转换中」。
+        #
+        # /engines/ 下只有 .wasm 与 .js 两种扩展名，所以在这里全列出来。
+        # 往里加新扩展名（.json、.css…）时必须同时加到这张表里——
+        # tests/unit/deploy-config.test.ts 盯着这两条，`docs/DECISIONS.md` ADR-012 记着实测。
+        #
+        # （nginx ≥ 1.21.6 的 mime.types 已自带 application/wasm，删掉整个块也能工作；
+        #   但 Ubuntu 22.04 与 Debian 11 装的是 1.18，没有这一条，样例要能照抄到老机器上。）
         types {
-            application/wasm wasm;
+            application/wasm       wasm;
+            application/javascript js;
         }
         add_header Cache-Control "public, max-age=604800" always;
         add_header Cross-Origin-Opener-Policy   "same-origin"  always;
@@ -84,6 +122,9 @@ server {
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
     }
 
+    # 与上面 `/engines/` 同一形态的写法，只是在这里安全：`=` 是精确匹配，
+    # 这个 location 只可能命中 .webmanifest 这一个文件，换掉整张表也不伤别人。
+    # 若哪天改成正则或前缀匹配，就必须把别的扩展名补回去（见 ADR-012）。
     location = /manifest.webmanifest {
         types { application/manifest+json webmanifest; }
         try_files $uri =404;

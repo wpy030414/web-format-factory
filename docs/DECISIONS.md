@@ -338,3 +338,76 @@ gifski 是 AGPL-3.0；libheif 是 LGPL-3.0。
   因为参数面板的默认值被 `changedParams` 滤掉了——**比第一处更隐蔽**。
 
 **何时重新审视**：不再需要——刻度只有一处了。
+
+---
+
+## ADR-012：location 层的 `types` 是替换语义——样例配置在真机上咬的第一口
+
+- **日期**：2026-09-26
+- **状态**：已采纳（**本条记录一次在真实服务器上暴露的失败**）
+
+**背景**：`deploy/` 下的 nginx 样例此前从未上过真机（README 的已知限制里写着这一点）。
+2026-09-26 它第一次被部署到一台 nginx/1.28.3 (Ubuntu) 上，于是拿到了第一份真机证据。
+
+**症状**：`GIF → Live Photo` 失败，控制台里只有一行：
+
+```
+TypeError: 'application/octet-stream' is not a valid JavaScript MIME type
+  for module script 'https://…/engines/ffmpeg/const.js'
+```
+
+`const.js` 是 ffmpeg.wasm 那个 module worker 的第一层 `import`（`worker.js` 里
+`import './const.js'`）。它加载不了，`FFmpeg.load()` 就既不 resolve 也不 reject——
+界面停在「转换中」。还是这个形状：**没有报错的那种坏**（同 ADR-005、ADR-010）。
+
+**根因**：样例的 `location /engines/` 里写着 `types { application/wasm wasm; }`，
+而这在 nginx 里不是「补一条」，是**换掉整张表**。合并逻辑只有一句
+（`ngx_http_core_module.c`）：
+
+```c
+if (conf->types == NULL) {
+    conf->types = prev->types;
+    conf->types_hash = prev->types_hash;
+}
+```
+
+本层声明了自己的 `types`，上层（http 层的 `include mime.types;`）那张表就不再继承。
+没列出的扩展名一律落到 `default_type`，而 Ubuntu 的 `nginx.conf` 把它设成
+`application/octet-stream`。于是 `.wasm` 活着，`.js` 死了。
+
+**证据**（同一次巡检的 `curl -sI`，对错并存——所以不是「服务器坏了」，而是「这一层换了表」）：
+
+| 路径 | Content-Type | |
+| --- | --- | --- |
+| `/assets/index-…js` | `application/javascript` | ✅ 没声明 types 的 location |
+| `/sw.js` | `application/javascript` | ✅ 同上 |
+| `/engines/ffmpeg/ffmpeg-core.wasm` | `application/wasm` | ✅ 被显式声明了 |
+| `/engines/ffmpeg/const.js` | `application/octet-stream` | ❌ 被换掉的那张表里没有它 |
+| `/engines/ffmpeg/ffmpeg-core.js` | `application/octet-stream` | ❌ 同上 |
+
+**决策**：`/engines/` 的 `types` 块把该目录真正用到的扩展名**列全**（`wasm` 与 `js`），
+并在注释里写明它是替换语义；`location = /manifest.webmanifest` 那处同形态的写法补一句
+为什么在那里安全（`=` 精确匹配，只可能命中一个文件）。
+
+**为什么不干脆删掉整个块**：nginx ≥ 1.21.6 的 `mime.types` 已自带 `application/wasm`，
+所以在咬人的那台 1.28.3 上删掉它也能工作。但 Ubuntu 22.04 与 Debian 11 装的都是 1.18，
+没有这一条——样例要能被照抄到老机器上，所以显式声明保留，只把它补全。
+
+**为什么参考服务器抓不到它**：`scripts/serve-deploy.mjs` 是用一张手写的 MIME 表实现的，
+它当然把 `.js` 映对了——**它不是 nginx，也就复现不了 nginx 的换表语义**。
+「产物侧全绿」与「真机上失败」并不矛盾，它们量的是两件事。
+
+**后果**：
+
+- 单元测试补上了配置侧的断言：前缀匹配的 location 一旦声明 `types`，必须自己补回 `.js`。
+  原先那条只检查「文件里出现过 `application/wasm`」——**它在坏掉的配置上同样成立**，
+  这正是它当初没拦住的原因。新断言已用「退回旧配置」的方式验证过会红。
+- nginx 样例头部带上了部署后自检（三条 `curl -sI`），错的那条会直接暴露出来。
+- 缓存把这次失败又延长了一截：`/engines/` 的响应是 `max-age=604800`，Service Worker
+  那边还是 `CacheFirst` 一年。**配置修好之后，已经访问过的浏览器仍会从缓存里拿到那份
+  octet-stream 的副本**，直到站点数据被清掉或缓存过期。修配置与清缓存是两件事。
+- Caddy 那份补了一句「别照着 nginx 这份往这里补 MIME 声明」——Caddy 的 MIME 表是全局的，
+  没有这回事。
+
+**何时重新审视**：若引擎资源改为带版本目录的路径（`/engines/ffmpeg-0.12.10/…`），
+那次改动会顺带绕开上面的缓存问题；MIME 声明本身则不能取消。
