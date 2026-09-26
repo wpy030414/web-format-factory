@@ -231,16 +231,12 @@ export class LivePhotoEngine implements Engine {
       }
     }
 
-    // 4. Package. `.livp` is a ZIP of the two, and it is what Apple's own tooling
-    //    recognises when it arrives by AirDrop or from a file.
-    const { bytes } = buildLivp(taggedStill, taggedMovie);
-
-    return {
-      output: new Blob([bytes as BlobPart], { type: 'application/zip' }),
-      outputName: outputNameFor(request.inputName, 'livp'),
-      engineId: this.id,
-      did: 'transcode',
-      extraLosses: [
+    // 4. Package. Two shapes, and the difference is not cosmetic: the `.livp` is a single
+    //    file, but it is also the one shape a photo library refuses to import — macOS has
+    //    no type for it at all. Two loose files are what actually goes in, and therefore
+    //    what can be AirDropped from Photos to an iPhone afterwards. See
+    //    docs/researches/live-photo-photos-import.md §7.1.
+    const extraLosses: LossItem[] = [
         ...losses,
         {
           code: 'still-image-time-track-missing',
@@ -253,7 +249,32 @@ export class LivePhotoEngine implements Engine {
             '没有写入 Apple 的 still-image-time 轨道：它用来标记静帧落在时间轴上的哪一点。' +
             '实测它不影响相册是否把两半认成一张实况照片，但仍与 Apple 自身的产物有差异。',
         },
-      ],
+    ];
+
+    if (request.params.package === 'two-files') {
+      const stillIsHeic = sniff(taggedStill.subarray(0, 64)).container === 'isobmff-heic';
+      return {
+        output: new Blob([taggedStill as BlobPart], {
+          type: stillIsHeic ? 'image/heic' : 'image/jpeg',
+        }),
+        outputName: outputNameFor(request.inputName, stillIsHeic ? 'heic' : 'jpg'),
+        companion: {
+          blob: new Blob([taggedMovie as BlobPart], { type: 'video/quicktime' }),
+          name: outputNameFor(request.inputName, 'mov'),
+        },
+        engineId: this.id,
+        did: 'transcode',
+        extraLosses,
+      };
+    }
+
+    const { bytes } = buildLivp(taggedStill, taggedMovie);
+    return {
+      output: new Blob([bytes as BlobPart], { type: 'application/zip' }),
+      outputName: outputNameFor(request.inputName, 'livp'),
+      engineId: this.id,
+      did: 'transcode',
+      extraLosses,
     };
   }
 

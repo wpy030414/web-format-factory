@@ -23,7 +23,8 @@ export type ParamId =
   | 'loop'
   | 'bitrate'
   | 'sampleRate'
-  | 'channels';
+  | 'channels'
+  | 'package';
 
 /**
  * Parameters that change *how* the bytes are represented.
@@ -43,6 +44,7 @@ export const SCOPE_ALLOWLIST: readonly ParamId[] = [
   'bitrate',
   'sampleRate',
   'channels',
+  'package',
 ] as const;
 
 export type ParamSpec =
@@ -276,6 +278,22 @@ const gif: FormatSpec = {
 };
 
 const LIVE_PARAMS: readonly ParamSpec[] = [
+  {
+    id: 'package',
+    label: '打包方式',
+    // Not an encoder setting, and it earns its place anyway: the `.livp` is Apple's
+    // *transport* container, and macOS has no type for it — Photos will not import one
+    // back (docs/researches/live-photo-photos-import.md §2). Two loose files are what
+    // actually reaches a photo library. A parameter rather than a second target, because
+    // the Live Photo itself is identical either way; only the wrapping differs.
+    help: '相册不认 .livp 这个压缩包，只认成对的两个文件。要导入「照片」App——或再由它隔空投送给 iPhone——选「两个文件」。',
+    control: 'enum',
+    options: [
+      { value: 'livp', label: '.livp 压缩包' },
+      { value: 'two-files', label: '两个文件（进相册用这个）' },
+    ],
+    default: 'livp',
+  },
   {
     id: 'quality',
     label: '静帧质量',

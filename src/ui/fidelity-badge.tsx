@@ -1,4 +1,4 @@
-import { CircleCheck, TriangleAlert, Layers, Zap, Clock, Download } from 'lucide-react';
+import { CircleCheck, TriangleAlert, Layers, Zap, Clock, Download, Share2 } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
 import type { Fidelity } from '@/core/types.ts';
 import type { LossItem } from '@/core/loss/codes.ts';
@@ -98,6 +98,27 @@ export function DownloadButton({ onClick, name }: { onClick: () => void; name: s
     >
       <Download className="size-3" />
       下载 {name}
+    </button>
+  );
+}
+
+/**
+ * Hand the result to the system share sheet.
+ *
+ * Shown only where sharing files is actually possible — on a desktop browser the answer is
+ * usually "just download it", and the button is hidden. On iOS it is the one route a web
+ * page has: it cannot open Photos, but the sheet can pass the file to an app that can.
+ */
+export function ShareButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="share-result"
+      onClick={onClick}
+      className="border-border hover:bg-accent inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium"
+    >
+      <Share2 className="size-3" />
+      分享
     </button>
   );
 }

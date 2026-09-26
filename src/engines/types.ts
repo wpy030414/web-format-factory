@@ -42,6 +42,16 @@ export interface EngineRequest {
 export interface EngineResult {
   output: Blob;
   outputName: string;
+  /**
+   * A second file that only makes sense alongside the first.
+   *
+   * Lives here for one concrete case: Apple's Live Photo is two files — a still and a
+   * short video — and Photos takes them as a pair. Zipping them into `.livp` makes one
+   * file out of something the library refuses to take back
+   * (docs/researches/live-photo-photos-import.md §2), so the user can ask for both halves
+   * loose, and both have to be saved.
+   */
+  companion?: { blob: Blob; name: string };
   /** The engine that actually did the work — surfaced in the result report. */
   engineId: string;
   /** What it actually did, which may differ from what was requested. */

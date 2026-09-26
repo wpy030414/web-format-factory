@@ -19,6 +19,8 @@ export interface ConvertOutcome {
   engineId: string;
   did: 'transmux' | 'transcode';
   extraLosses: LossItem[];
+  /** A second file that belongs with the first — Apple's Live Photo is a pair. */
+  companion?: { blob: Blob; name: string };
 }
 
 interface PendingJob {
@@ -87,6 +89,7 @@ export class MediaEngineClient {
         engineId: msg.engineId,
         did: msg.did,
         extraLosses: msg.extraLosses,
+        ...(msg.companion ? { companion: msg.companion } : {}),
       });
       return;
     }

@@ -1129,6 +1129,61 @@ test.describe('兜底引擎', () => {
     expect(tags).toContain('com.apple.quicktime.content.identifier');
   });
 });
+  test('组装 Live Photo：选「两个文件」时，给的是能进相册的那一对', async ({ page }) => {
+    // The `.livp` is one file — and it is also the one shape macOS refuses to import, so
+    // the route that actually reaches a photo library has to be able to hand both halves
+    // over loose. See docs/researches/live-photo-photos-import.md §7.1.
+    await page.goto('/');
+    await dropFile(page, 'av.mp4');
+    await waitForClass(page);
+
+    await page.getByRole('button', { name: 'Live Photo', exact: true }).click();
+    await page.getByTestId('param-package').selectOption('two-files');
+    await page.getByRole('button', { name: /开始转换/ }).click();
+
+    const downloadButton = page.getByTestId('download-result').first();
+    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
+    await expect(downloadButton).toHaveText(/两个文件/);
+
+    // One click, two files. Either half alone is not a Live Photo — and saving only the
+    // still is precisely the quiet failure this route exists to prevent.
+    const downloads: { suggestedFilename(): string; saveAs(p: string): Promise<void> }[] = [];
+    page.on('download', (d) => downloads.push(d));
+    await downloadButton.click();
+    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(2);
+
+    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
+    tmpDirs.push(dir);
+    const names = downloads.map((d) => d.suggestedFilename());
+    const stillName = names.find((n) => n.endsWith('.jpg'));
+    const videoName = names.find((n) => n.endsWith('.mov'));
+    expect(stillName, `没有静图：${names.join(', ')}`).toBeTruthy();
+    expect(videoName, `没有视频：${names.join(', ')}`).toBeTruthy();
+
+    await downloads[names.indexOf(stillName!)]!.saveAs(join(dir, stillName!));
+    await downloads[names.indexOf(videoName!)]!.saveAs(join(dir, videoName!));
+
+    // And they have to be a *pair*: Photos matches the two by an identifier that both
+    // carry — the still in its maker notes, the video in its QuickTime metadata. Reading
+    // it out of the video with ffprobe and looking for the same string in the still's
+    // bytes keeps this to tools that share no code with ours.
+    const tags = execFileSync(
+      'ffprobe',
+      [
+        '-v', 'error',
+        '-show_entries', 'format_tags=com.apple.quicktime.content.identifier',
+        '-of', 'default=nw=1:nk=1',
+        join(dir, videoName!),
+      ],
+      { encoding: 'utf8' },
+    ).trim();
+    expect(tags).toMatch(/^[0-9A-F-]{36}$/);
+
+    const still = readFileSync(join(dir, stillName!));
+    expect(still.includes(Buffer.from('Apple iOS'))).toBe(true);
+    expect(still.includes(Buffer.from(tags))).toBe(true);
+  });
+
 
 test.describe('能力诊断页', () => {
   test('从页脚进入，并报告真实的探测结果', async ({ page }) => {

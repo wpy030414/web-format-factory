@@ -17,9 +17,16 @@ import { describeProfile, formatSize } from '@/core/probe/profile.ts';
 import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
 import { planAllTargets, planFor } from '@/core/routing/resolve.ts';
 import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
-import { triggerDownload, type FileEntry } from '@/state/store.ts';
+import { downloadResult, resultFiles, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
-import { DownloadButton, FidelityBadge, LossList, SpeedBadge } from './fidelity-badge.tsx';
+import { canShareFiles, shareFiles } from '@/lib/share.ts';
+import {
+  DownloadButton,
+  FidelityBadge,
+  LossList,
+  ShareButton,
+  SpeedBadge,
+} from './fidelity-badge.tsx';
 import { ParamPanel } from './param-panel.tsx';
 
 const FAMILY_LABELS: Record<string, string> = {
@@ -397,9 +404,15 @@ function StatusLine({ entry }: { entry: FileEntry }) {
           <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
         </span>
         <DownloadButton
-          onClick={() => triggerDownload(entry.result!.blob, entry.result!.name)}
-          name={entry.result.name}
+          onClick={() => downloadResult(entry.result!)}
+          // Named honestly when there are two: saving only the still would leave the user
+          // with a photograph and no Live Photo, which is exactly the failure this whole
+          // route exists to avoid.
+          name={entry.result.companion ? '两个文件' : entry.result.name}
         />
+        {canShareFiles(resultFiles(entry.result)) && (
+          <ShareButton onClick={() => void shareFiles(resultFiles(entry.result!))} />
+        )}
       </div>
     );
   }

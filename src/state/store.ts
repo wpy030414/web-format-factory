@@ -21,7 +21,13 @@ export interface FileEntry {
   target: FormatId | null;
   progress?: number;
   did?: 'transmux' | 'transcode';
-  result?: { blob: Blob; name: string; size: number };
+  result?: {
+    blob: Blob;
+    name: string;
+    size: number;
+    /** A second file that belongs with the first: Apple's Live Photo is a pair. */
+    companion?: { blob: Blob; name: string; size: number };
+  };
   error?: string;
   /** Set once the user has acknowledged a critical loss for this file. */
   acknowledged?: boolean;
@@ -146,6 +152,15 @@ export const useStore = create<State>((set, get) => {
                   blob: outcome.output,
                   name: outcome.outputName,
                   size: outcome.output.size,
+                  ...(outcome.companion
+                    ? {
+                        companion: {
+                          blob: outcome.companion.blob,
+                          name: outcome.companion.name,
+                          size: outcome.companion.blob.size,
+                        },
+                      }
+                    : {}),
                 },
               }
             : f,
@@ -349,7 +364,7 @@ export const useStore = create<State>((set, get) => {
 
     downloadAll() {
       for (const f of get().files) {
-        if (f.status === 'done' && f.result) triggerDownload(f.result.blob, f.result.name);
+        if (f.status === 'done' && f.result) downloadResult(f.result);
       }
     },
   };
@@ -514,6 +529,31 @@ export function pickDefaultTarget(
 
   const free = candidates.find((c) => planFor(profile, c, caps).did === 'transmux');
   return free ?? candidates[0] ?? null;
+}
+
+/**
+ * Every file a finished result consists of, primary first.
+ *
+ * Almost every result is one file. Apple's Live Photo is the exception: asked for as two
+ * files it comes back as a still plus a video, and both are useless without the other.
+ */
+export function resultFiles(result: {
+  blob: Blob;
+  name: string;
+  companion?: { blob: Blob; name: string };
+}): { blob: Blob; name: string }[] {
+  const files = [{ blob: result.blob, name: result.name }];
+  if (result.companion) files.push({ blob: result.companion.blob, name: result.companion.name });
+  return files;
+}
+
+/** Save every file a result consists of. */
+export function downloadResult(result: {
+  blob: Blob;
+  name: string;
+  companion?: { blob: Blob; name: string };
+}): void {
+  for (const file of resultFiles(result)) triggerDownload(file.blob, file.name);
 }
 
 export function triggerDownload(blob: Blob, name: string): void {

@@ -43,6 +43,8 @@ export type FromWorker =
       engineId: string;
       did: 'transmux' | 'transcode';
       extraLosses: LossItem[];
+      /** A second file that belongs with the first — Apple's Live Photo is a pair. */
+      companion?: { blob: Blob; name: string };
     }
   | { type: 'error'; jobId: string; message: string; code: string };
 
@@ -159,6 +161,7 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
       engineId: result.engineId,
       did: result.did,
       extraLosses: result.extraLosses ?? [],
+      ...(result.companion ? { companion: result.companion } : {}),
     });
   } catch (cause) {
     const described = describeError(cause);
