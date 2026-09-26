@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react';
-import { cn } from '@/lib/utils.ts';
 import { FORMATS, type ParamSpec } from '@/core/registry/formats.ts';
 import type { FormatId } from '@/core/types.ts';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select.tsx';
+import { Slider } from '@/components/ui/slider.tsx';
+import { Switch } from '@/components/ui/switch.tsx';
 
 interface ParamPanelProps {
   target: FormatId;
@@ -92,8 +94,10 @@ function ParamControl({
   onChange: (key: string, value: unknown) => void;
   disabled?: boolean;
 }) {
-  // Native controls throughout: they are keyboard- and screen-reader-correct for free,
-  // and a slider that cannot be reached by keyboard is worse than a plain one.
+  // shadcn/ui controls, which are Radix underneath. That matters because the reason these
+  // used to be raw elements still holds: a slider that cannot be reached by keyboard is
+  // worse than a plain one. Radix keeps the keyboard and screen-reader behaviour and adds
+  // the styling, so the choice is no longer per-call-site guesswork.
   const id = `param-${spec.id}`;
 
   return (
@@ -108,53 +112,55 @@ function ParamControl({
             {String(value ?? spec.default)}
           </span>
         )}
+
+        {spec.control === 'toggle' && (
+          <Switch
+            id={id}
+            data-testid={id}
+            disabled={disabled}
+            checked={Boolean(value ?? spec.default)}
+            onCheckedChange={(checked) => onChange(spec.id, checked)}
+          />
+        )}
       </div>
 
       {spec.control === 'range' && (
-        <input
+        <Slider
           id={id}
           data-testid={id}
-          type="range"
+          // Named here rather than by the <label> above: a label cannot be associated with
+          // a span, and the element that carries role="slider" is the thumb inside. Our
+          // vendored copy of the component forwards this down to it.
+          aria-label={spec.label}
+          className="mt-2"
+          disabled={disabled}
           min={spec.min}
           max={spec.max}
           step={spec.step}
-          disabled={disabled}
-          value={Number(value ?? spec.default)}
-          onChange={(e) => onChange(spec.id, Number(e.target.value))}
-          className="accent-primary mt-1 h-1.5 w-full cursor-pointer disabled:opacity-50"
-        />
-      )}
-
-      {spec.control === 'toggle' && (
-        <input
-          id={id}
-          data-testid={id}
-          type="checkbox"
-          disabled={disabled}
-          checked={Boolean(value ?? spec.default)}
-          onChange={(e) => onChange(spec.id, e.target.checked)}
-          className="mt-1 block disabled:opacity-50"
+          value={[Number(value ?? spec.default)]}
+          onValueChange={([next]) => onChange(spec.id, next)}
         />
       )}
 
       {spec.control === 'enum' && (
-        <select
-          id={id}
-          data-testid={id}
+        <Select
           disabled={disabled}
           value={String(value ?? spec.default)}
-          onChange={(e) => onChange(spec.id, e.target.value)}
-          className={cn(
-            'border-input bg-background mt-1 w-full rounded-md border px-2 py-1 text-xs',
-            'disabled:cursor-not-allowed disabled:opacity-50',
-          )}
+          onValueChange={(next) => onChange(spec.id, next)}
         >
-          {spec.options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={id} data-testid={id} size="sm" className="mt-1 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          {/* Portalled: a select's menu must escape the card's overflow, or a long option
+              list is clipped by the very card that owns it. */}
+          <SelectContent>
+            {spec.options.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
 
       {spec.help && <p className="text-muted-foreground mt-1 text-[11px] leading-snug">{spec.help}</p>}

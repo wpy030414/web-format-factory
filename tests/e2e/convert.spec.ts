@@ -96,6 +96,19 @@ async function waitForClass(page: Page): Promise<string> {
 }
 
 /**
+ * Choose an option in the parameter panel's dropdown.
+ *
+ * It is a shadcn Select, not a native `<select>`: the trigger is a button and the options
+ * live in a portal. `selectOption` cannot drive that — it throws "Element is not a
+ * <select> element" — so this clicks the trigger and then the option, which is exactly the
+ * interaction a user performs and therefore the one worth putting under test.
+ */
+async function pickParam(page: Page, testId: string, option: string | RegExp): Promise<void> {
+  await page.getByTestId(testId).click();
+  await page.getByRole('option', { name: option }).click();
+}
+
+/**
  * Run a conversion and save the resulting file to disk.
  *
  * The app presents the finished file with a download button rather than auto-saving,
@@ -1006,7 +1019,7 @@ test.describe('编码参数', () => {
     // Choosing a different codec forces a re-encode. The verdict has to follow the
     // setting that caused it — a summary that still promised "lossless" here would be
     // telling the user something the conversion is not going to do.
-    await page.getByTestId('param-codec').selectOption('vp9');
+    await pickParam(page, 'param-codec', 'VP9');
     await expect(plan.getByText('需重新编码')).toBeVisible();
   });
 
@@ -1016,7 +1029,7 @@ test.describe('编码参数', () => {
     await waitForClass(page);
 
     await page.getByRole('button', { name: 'Matroska', exact: true }).click();
-    await page.getByTestId('param-codec').selectOption('vp9');
+    await pickParam(page, 'param-codec', 'VP9');
 
     const saved = await convertAndSave(page, 'Matroska', 'out.mkv');
     // VP9, not the source's H.264 — proof the setting reached the encoder.
@@ -1096,7 +1109,7 @@ test.describe('兜底引擎', () => {
     await page.getByRole('button', { name: 'Ogg', exact: true }).click();
     // Vorbis is the whole point of this test — the default, Opus, has a native encoder
     // and would never reach the fallback engine at all.
-    await page.getByTestId('param-codec').selectOption('vorbis');
+    await pickParam(page, 'param-codec', /Vorbis/);
     await page.getByRole('button', { name: /开始转换/ }).click();
 
     const downloadButton = page.getByTestId('download-result').first();
