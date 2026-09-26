@@ -1430,4 +1430,39 @@ test.describe('能力诊断页', () => {
     await page.getByRole('link', { name: /返回转换器/ }).click();
     await expect(page.getByRole('heading', { name: 'Web Format Factory' })).toBeVisible();
   });
+
+  test('强制刷新：先说清代价，确认后真的清掉缓存，然后重新加载', async ({ page }) => {
+    await page.goto('/#/capabilities');
+    await expect(page.getByRole('button', { name: '强制刷新' })).toBeVisible();
+
+    // Nothing is cleared on the first click. Dropping the engine cache costs a 31 MB
+    // download next time, so the button asks before it spends that — and a cancel is a
+    // real way back, not a dead end.
+    await page.getByTestId('force-refresh').click();
+    await expect(page.getByTestId('force-refresh-confirm')).toBeVisible();
+    await expect(page.getByText(/重新下载兜底引擎/)).toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+    await expect(page.getByTestId('force-refresh')).toBeVisible();
+
+    // Asking again, for real this time.
+    await page.getByTestId('force-refresh').click();
+    await expect(page.getByTestId('force-refresh-confirm')).toBeVisible();
+
+    // Plant something to clear. Asserting only that the button was pressed would pass even
+    // if the clearing silently did nothing — which is the failure that matters here, since
+    // the whole premise is that a stale cache is invisible from this page.
+    await page.evaluate(() => void caches.open('e2e-planted'));
+    expect(await page.evaluate(() => caches.keys())).toContain('e2e-planted');
+
+    // Armed before the click: the reload follows within a beat, and a listener attached
+    // afterwards would have missed it.
+    const reloaded = page.waitForEvent('load');
+    await page.getByTestId('force-refresh-go').click();
+
+    // What was cleared is reported rather than implied, and never as a bare "done".
+    await expect(page.getByTestId('force-refresh-done')).toContainText('1 份缓存');
+
+    await reloaded;
+    expect(await page.evaluate(() => caches.keys())).not.toContain('e2e-planted');
+  });
 });

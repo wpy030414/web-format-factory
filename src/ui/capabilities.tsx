@@ -3,6 +3,7 @@ import { CircleCheck, CircleX, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
 import { probeCapabilities, type Capabilities, type CodecTable } from '@/core/caps.ts';
 import { codecLabel } from '@/core/codecs.ts';
+import { ForceRefresh } from './force-refresh.tsx';
 
 /**
  * The capability report.
@@ -12,6 +13,10 @@ import { codecLabel } from '@/core/codecs.ts';
  * HEIC decodes natively, whether cross-origin isolation is actually on. When something
  * does not work, this page is the first place to look; when someone reports a problem,
  * this page is what you ask them for.
+ *
+ * Which is also why the way out of a stale report sits in the header, next to the title:
+ * part of what the browser hands over is decided by caches, and from in here a cached
+ * answer is indistinguishable from a real one.
  */
 export function CapabilitiesPage() {
   const [caps, setCaps] = useState<Capabilities | null>(null);
@@ -22,11 +27,19 @@ export function CapabilitiesPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-10">
-      <header className="mb-7">
-        <h1 className="text-2xl font-semibold tracking-tight">本机能力诊断</h1>
-        <a href="#/" className="text-muted-foreground hover:text-foreground mt-3 inline-block text-xs">
-          ← 返回转换器
-        </a>
+      <header className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">本机能力诊断</h1>
+          <a
+            href="#/"
+            className="text-muted-foreground hover:text-foreground mt-3 inline-block text-xs"
+          >
+            ← 返回转换器
+          </a>
+        </div>
+        {/* Beside the title on a wide screen, stacked under it on a narrow one: a utility
+            action must not be able to squeeze the heading into two lines. */}
+        <ForceRefresh />
       </header>
 
       {!caps && (
