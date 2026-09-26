@@ -110,23 +110,31 @@ export class AnimationEngine implements Engine {
     const maxColors = clampMaxColors(params.paletteSize ?? GIF_MAX_COLORS);
     const dither = gifDither(params.dither);
 
-    if (await isGif(input)) {
-      const frames = await animatedFrames(input);
-      return encodeFrames(frames, maxColors, dither, onProgress, signal);
-    }
+    // A GIF decodes through the GIF library; an animated WebP or APNG through the
+    // browser's frame-level image API. Both give the same thing — a frame sequence —
+    // and only the source differs.
+    const frames =
+      (await isGif(input))
+        ? await animatedFrames(input)
+        : await decodeImageAnimation(input);
+
+    if (frames) return encodeFrames(frames, maxColors, dither, onProgress, signal);
 
     return videoToGif(input, maxColors, dither, onProgress, signal);
   }
 
-  /** Animated GIF → video container. */
+  /** Animated GIF, WebP or APNG → video container. */
   async #toVideo(request: EngineRequest, target: FormatId, signal?: AbortSignal): Promise<Blob> {
-    if (!(await isGif(request.input))) {
+    const frames = (await isGif(request.input))
+      ? await animatedFrames(request.input)
+      : await decodeImageAnimation(request.input);
+
+    if (!frames) {
       // Anything else that reaches here is a real format the other engines could not
       // read, and we will not invent motion for a still image.
       throw new EngineError('这个来源无法转成视频', 'unsupported');
     }
 
-    const frames = await animatedFrames(request.input);
     if (signal?.aborted) throw new EngineError('已取消', 'aborted');
     if (frames.length > MAX_FRAMES) throw tooManyFrames(frames.length);
 
@@ -273,6 +281,138 @@ async function animatedFrames(blob: Blob): Promise<DecodedFrame[]> {
   } catch (cause) {
     throw new EngineError(`无法解码这个动图：${(cause as Error).message}`, 'decode-failed');
   }
+}
+
+/**
+ * The slice of WebCodecs' image API this file uses.
+ *
+ * Declared locally rather than taken from the global typings, because `ImageDecoder` is
+ * still unevenly available — present in Chromium and Firefox, absent from Safari — and
+ * whether a given lib file admits that is not something worth depending on.
+ */
+interface ImageTrackListLike {
+  /**
+   * Resolves once the list has actually been populated.
+   *
+   * Not optional decoration. `completed` means the *bytes* have arrived; the track list
+   * is filled in separately and lags behind it. Measured in Chromium: right after
+   * `await decoder.completed`, `tracks.length` is 0 and `selectedTrack` is null — which
+   * is indistinguishable from "this file is not an animation" and would send the job
+   * down a path that cannot work.
+   */
+  ready?: Promise<void>;
+  selectedTrack: { frameCount: number } | null;
+}
+
+interface ImageDecoderLike {
+  tracks: ImageTrackListLike;
+  completed: Promise<void>;
+  decode(options: { frameIndex: number }): Promise<{ image: VideoFrame }>;
+  close(): void;
+}
+
+interface ImageDecoderCtor {
+  new (init: { data: BufferSource; type: string }): ImageDecoderLike;
+}
+
+/**
+ * Decode an animated WebP or APNG into frames.
+ *
+ * Neither is a video, so the media library cannot read either one — and before this, the
+ * only route from an animated WebP to a GIF ran through the 31 MB fallback engine, which
+ * is an absurd price for something the browser can already do. `ImageDecoder` is
+ * WebCodecs' frame-level image API, and it hands the animation over *composited*, so
+ * frame disposal and blending are somebody else's problem.
+ *
+ * Returns `null` when this is not an animation we can take apart, leaving the caller to
+ * decide whether some other path applies.
+ */
+async function decodeImageAnimation(blob: Blob): Promise<DecodedFrame[] | null> {
+  const head = new Uint8Array(await blob.slice(0, 64).arrayBuffer());
+  const container = sniff(head).container;
+  if (container !== 'webp' && container !== 'png') return null;
+
+  const Decoder = (globalThis as { ImageDecoder?: ImageDecoderCtor }).ImageDecoder;
+  if (typeof Decoder !== 'function') return null;
+
+  let decoder: ImageDecoderLike;
+  try {
+    decoder = new Decoder({
+      data: await blob.arrayBuffer(),
+      // The declared type decides how the bytes are read. A dropped file frequently has
+      // no type at all, so it comes from the sniffed container instead of the Blob.
+      type: container === 'webp' ? 'image/webp' : 'image/png',
+    });
+    await decoder.completed;
+  } catch {
+    // Either not an animation or not one this browser can parse. Not our business
+    // either way — the caller has other paths to try.
+    return null;
+  }
+
+  try {
+    // Wait for the track list, not just for the bytes. See `ImageTrackListLike.ready`.
+    await decoder.tracks.ready?.catch(() => undefined);
+
+    const count = decoder.tracks.selectedTrack?.frameCount ?? 0;
+    // One frame is a still image, and the still-image engine handles those better.
+    if (count < 2) return null;
+    if (count > MAX_FRAMES) throw tooManyFrames(count);
+
+    const frames: DecodedFrame[] = [];
+
+    // One scratch canvas, sized from the first frame and reused for every one after it.
+    // `??=` narrows it non-null for the rest of the loop body.
+    let scratch: { canvas: OffscreenCanvas; ctx: OffscreenCanvasRenderingContext2D } | undefined;
+
+    for (let index = 0; index < count; index += 1) {
+      const { image } = await decoder.decode({ frameIndex: index });
+      try {
+        scratch ??= scratchCanvas(image.displayWidth, image.displayHeight);
+        const { canvas, ctx } = scratch;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0);
+
+        frames.push({
+          width: canvas.width,
+          height: canvas.height,
+          delay: delayCentiseconds(image.duration),
+          // A fresh buffer per frame by necessity: the canvas is reused, so the pixels
+          // have to be copied out before the next frame is drawn over them.
+          data: ctx.getImageData(0, 0, canvas.width, canvas.height).data,
+        });
+      } finally {
+        // A leaked VideoFrame is the classic way a WebCodecs app runs out of decoder
+        // slots and then dies somewhere unrelated.
+        image.close();
+      }
+    }
+
+    return frames;
+  } finally {
+    decoder.close();
+  }
+}
+
+function scratchCanvas(width: number, height: number) {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new EngineError('无法创建绘图上下文', 'encode-failed');
+  return { canvas, ctx };
+}
+
+/**
+ * WebCodecs reports frame durations in microseconds; GIF counts in centiseconds, which
+ * is where its famous 10 ms granularity comes from.
+ */
+function delayCentiseconds(duration: number | null | undefined): number {
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0) {
+    // A missing duration means "as fast as the renderer likes", which every
+    // implementation settles at 100 ms.
+    return GIF_MIN_DELAY * 10;
+  }
+  return Math.max(GIF_MIN_DELAY, Math.round(duration / 10_000));
 }
 
 /** Re-encode an existing frame sequence into a GIF, applying new palette settings. */

@@ -185,6 +185,7 @@ const apng: FormatSpec = {
     metadata: false,
   },
   params: [],
+  note: 'Encoding requires the fallback engine — a ~31 MB one-time download.',
 };
 
 const webp: FormatSpec = {

@@ -67,6 +67,36 @@ const TARGETS: Partial<Record<FormatId, FfmpegTarget>> = {
       ];
     },
   },
+
+  // APNG is the other animation container with no encoder in reach: `canvas.convertToBlob`
+  // writes a single frame, and the libraries that do exist are unmaintained. The muxer
+  // has to be named explicitly — `.png` on its own selects the still-image muxer, which
+  // would silently write the first frame and call it an animation.
+  apng: {
+    args: (source, sink) => [
+      '-i', source,
+      '-c:v', 'apng',
+      '-plays', '0',
+      '-f', 'apng',
+      sink,
+    ],
+  },
+
+  // Vorbis, which the primary engine can decode and nothing can write — libvorbis lives
+  // only in ffmpeg. Opus is the better codec and the default; this exists because
+  // "Ogg + Vorbis" is what some players still ask for, and the parameter panel has been
+  // promising this route since before it existed.
+  ogg: {
+    args: (source, sink, params) => [
+      '-i', source,
+      '-c:a', 'libvorbis',
+      // libvorbis grades quality 0–10 where ours is 0–100.
+      '-q:a', String(Math.round(percent(params.quality, 80) / 10)),
+      // Whatever container the source was in, the target is audio.
+      '-vn',
+      sink,
+    ],
+  },
 };
 
 export class FfmpegEngine implements Engine {
