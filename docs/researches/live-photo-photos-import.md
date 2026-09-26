@@ -159,6 +159,22 @@ ffmpeg udta/meta : 00 00 04 46 6d 65 74 61 | 00 00 00 00 | 00 00 00 21 68 64 6c 
 
 两处修正都是**纯字节手术**，浏览器里做得到（不需要 Core Graphics，也不需要合成 `mebx` 轨道——后者一度看起来是最大的一块，结果根本不需要）。
 
+### 7.1 iOS 不一样：文件导入在 iOS 上**不配对**
+
+同一对文件（`IMG_0001.JPG` + `IMG_0001.MOV`，两侧标识一致、在 macOS 上配对成功的那一份）
+隔空投送到 iPhone 之后：**相册里是两条**——一条视频、一张照片，没有被合成实况照片。
+
+也就是说 §1 那个「1 条 = 配对」的判据**只在 macOS 成立**。iOS 侧把这两条路分得很清：
+
+| 路径 | macOS | iOS |
+| --- | --- | --- |
+| 文件导入（AppleScript `import` / 隔空投送） | 配对 ✓ | **不配对**（实测） |
+| iCloud 照片同步 | 相册里的实况照片随同步下发 ✓（Apple 机制，未在本机验证） | 同上 |
+| PhotoKit 的 `PHAssetCreationRequest` + `.pairedVideo` | — | 第三方 App 靠它凭空造实况照片 |
+
+`.livp` 容器两边都不认（§2，iOS 亦然）。所以在 iOS 上，能走的路只剩「相册里已经有一张
+实况照片，再靠 iCloud 同步过去」或「用走 PhotoKit 的第三方 App 造一张」。
+
 ## 8. 对项目的意义
 
 ### 8.1 缺的是这两样，不是那两样
@@ -193,7 +209,7 @@ ADR-004 / ADR-009 拒绝过的「凭二手描述手写字节」在这里不再�
 
 ## 9. 遗留问题
 
-- **iOS 侧完全没测。**本机只有 macOS，`AirDrop 到 iPhone` 这条最常被推荐的路一次都没验证。
+- ~~**iOS 侧完全没测。**~~ 已测（§7.1）：**iOS 的文件导入不配对**，与 macOS 不同。`iCloud 同步`与`走 PhotoKit 的第三方 App`是 iOS 上仅剩的两条路。
 - **导入以外的路径没测**：设备导入、iCloud、PhotoKit 的 `PHAssetCreationRequest`。
 - **JPEG 之外**：HEIC 静图、HEVC/AVC 视频是否同样成立，没有分离验证。
 - **MakerNote 的最小形态未知**：Core Graphics 写的那个 MakerNote 里只有键 17，但 Apple 的完整 MakerNote 还有几十个键。是否「只有 17 就够」在本轮是**是**（P/QT 都是只有 17 就配上了）。
