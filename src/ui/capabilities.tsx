@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { CircleCheck, CircleX, Loader2, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/utils.ts';
-import { probeCapabilities, type Capabilities } from '@/core/caps.ts';
+import { probeCapabilities, type Capabilities, type CodecTable } from '@/core/caps.ts';
+import { codecLabel } from '@/core/codecs.ts';
 
 /**
  * The capability report.
@@ -94,19 +95,19 @@ function Meaning({ caps }: { caps: Capabilities }) {
       '未开启跨源隔离 → 动态 WebP 编码与 Live Photo 的配对标识写入不可用（两者都需要兜底引擎）。',
     );
   }
-  if (!caps.audioEncode['MP3']) {
+  if (!caps.audioEncode.mp3) {
     lines.push('无法编码 MP3 → 目标是 MP3 时会加载 LAME 编码器扩展。');
   }
-  if (!caps.audioEncode['FLAC']) {
+  if (!caps.audioEncode.flac) {
     lines.push('无法编码 FLAC → 目标是 FLAC 时会加载 libFLAC 扩展。');
   }
-  if (!caps.videoEncode['H.265']) {
+  if (!caps.videoEncode.hevc) {
     lines.push('无法编码 H.265 → 目标选 H.265 时会落到其他编码器。');
   }
-  if (!caps.videoEncode['VP9']) {
+  if (!caps.videoEncode.vp9) {
     lines.push('无法编码 VP9 → MP4 转 WebM 这类转换在此机器上不可用。');
   }
-  if (!caps.videoEncode['AV1']) {
+  if (!caps.videoEncode.av1) {
     lines.push('无法编码 AV1 → AV1 输出不可用（浏览器与 stock 兜底核心都不支持）。');
   }
   if (lines.length === 0) {
@@ -131,18 +132,18 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function CodecSection({ title, table }: { title: string; table: Record<string, boolean> }) {
+function CodecSection({ title, table }: { title: string; table: CodecTable }) {
   return (
     <Section title={title}>
       <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-3">
-        {Object.entries(table).map(([name, ok]) => (
-          <div key={name} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        {Object.entries(table).map(([id, ok]) => (
+          <div key={id} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
             {ok ? (
               <CircleCheck className="text-fidelity-lossless size-3 shrink-0" />
             ) : (
               <CircleX className="text-muted-foreground size-3 shrink-0" />
             )}
-            <span className={cn(!ok && 'text-muted-foreground')}>{name}</span>
+            <span className={cn(!ok && 'text-muted-foreground')}>{codecLabel(id)}</span>
           </div>
         ))}
       </div>

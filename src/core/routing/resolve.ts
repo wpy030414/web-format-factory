@@ -5,6 +5,7 @@ import type { MediaProfile } from '../probe/profile.ts';
 import type { ContainerId, Fidelity, FormatId, RouteShape } from '../types.ts';
 import { IMPOSSIBILITY_COPY, type Impossibility } from './impossibility.ts';
 import { alternativesFor, verdictFor, type Verdict } from './transitions.ts';
+import { codecLabel } from '../codecs.ts';
 import { shutGate, type RouteCapabilities } from './gates.ts';
 import { ALL_FORMAT_IDS, FORMATS } from '../registry/formats.ts';
 
@@ -93,7 +94,7 @@ export function planFor(
       impossibility: {
         reason: verdict.reason,
         ...(verdict.reason === 'no-encoder-in-browser' && profile.videoTracks[0]
-          ? { detail: profile.videoTracks[0].codec.toUpperCase() }
+          ? { detail: codecLabel(profile.videoTracks[0].codec) }
           : {}),
         alternatives: alternativesFor(profile.mediaClass, ALL_FORMAT_IDS),
       },

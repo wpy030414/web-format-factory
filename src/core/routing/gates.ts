@@ -1,6 +1,7 @@
 import type { FormatId } from '../types.ts';
 import type { MediaProfile } from '../probe/profile.ts';
 import { getFormat } from '../registry/formats.ts';
+import { codecLabel } from '../codecs.ts';
 import type { Verdict } from './transitions.ts';
 
 /**
@@ -199,5 +200,5 @@ function decoderDoor({ profile, target, verdict, copyable }: GateContext): ShutG
   const blocked = needed.find((track) => !track.decodable);
   if (!blocked) return null;
 
-  return { reason: 'no-decoder-in-browser', detail: blocked.codec.toUpperCase() };
+  return { reason: 'no-decoder-in-browser', detail: codecLabel(blocked.codec) };
 }

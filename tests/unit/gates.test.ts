@@ -193,7 +193,7 @@ describe('decoder door — 源解不开', () => {
     });
     expect(shutGate(stuck)?.reason).toBe('no-decoder-in-browser');
     // Named, so the user can tell whether switching browsers would help.
-    expect(shutGate(stuck)?.detail).toBe('HEVC');
+    expect(shutGate(stuck)?.detail).toBe('H.265');
   });
 
   it('导出一个包的静图那一半，从不触碰它的视频', () => {
@@ -226,7 +226,7 @@ describe('decoder door — 源解不开', () => {
 
     expect(shutGate(ctx({ profile, target: 'gif', copyable: false }))).toBeNull();
     // But a target that does carry sound needs it decoded.
-    expect(shutGate(ctx({ profile, target: 'mp4', copyable: false }))?.detail).toBe('VORBIS');
+    expect(shutGate(ctx({ profile, target: 'mp4', copyable: false }))?.detail).toBe('Vorbis');
   });
 
   it('全都解得开时，门是开的', () => {
@@ -299,7 +299,7 @@ describe('planFor — 门落在计划上，而不是路由表上', () => {
     const reencode = planFor(unplayable, 'webm', FULL);
     expect(reencode.feasible).toBe(false);
     expect(reencode.impossibility?.reason).toBe('no-decoder-in-browser');
-    expect(reencode.impossibility?.detail).toBe('HEVC');
+    expect(reencode.impossibility?.detail).toBe('H.265');
   });
 
   it('可行性随门变化，而不是随格式对变化', () => {

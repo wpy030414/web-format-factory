@@ -1,3 +1,6 @@
+import { CODECS, PROBED_AUDIO_CODECS, PROBED_VIDEO_CODECS } from './codecs.ts';
+import type { CodecId } from './types.ts';
+
 /**
  * What this browser can actually do.
  *
@@ -7,8 +10,12 @@
  *
  * Codec strings matter more than they look. `VideoEncoder.isConfigSupported` rejects a
  * bare `'vp9'` and accepts `'vp09.00.10.08'`; a probe written with the short name reports
- * VP9 as unavailable on a machine that encodes it perfectly well.
+ * VP9 as unavailable on a machine that encodes it perfectly well. Those strings live in
+ * `codecs.ts` so there is exactly one of each.
  */
+
+/** One codec's answer, keyed by our own codec id rather than by its display name. */
+export type CodecTable = Partial<Record<CodecId, boolean>>;
 
 export interface Capabilities {
   /** Required by the fallback engine, which fails silently without it. */
@@ -21,39 +28,34 @@ export interface Capabilities {
   /** Can the browser decode HEIC itself? True on Safari 17+, false almost everywhere. */
   heicNative: boolean;
 
-  videoEncode: Record<string, boolean>;
-  videoDecode: Record<string, boolean>;
-  audioEncode: Record<string, boolean>;
-  audioDecode: Record<string, boolean>;
+  videoEncode: CodecTable;
+  videoDecode: CodecTable;
+  audioEncode: CodecTable;
+  audioDecode: CodecTable;
+}
+
+/** The encoder half of the report, which routing needs on its own. */
+export interface EncoderCapabilities {
+  video: CodecTable;
+  audio: CodecTable;
 }
 
 /**
- * Codec strings to probe, with the form the browser actually expects.
+ * Ask the browser which codecs it can *encode*, and nothing else.
  *
- * H.264 needs a profile/level suffix and nothing else will do. The values are the
- * widely-supported Main profile at level 3.1 and 5.2 respectively.
+ * Split out because routing needs this answer and none of the others, and the rest of the
+ * report is not free: `probeHeic` fetches a real HEIC over the network. A planner that
+ * pulled in the whole report would make every page load pay for a diagnostic it never
+ * shows.
  */
-const VIDEO_CODECS: Record<string, string> = {
-  'H.264': 'avc1.42001f',
-  'H.265': 'hvc1.1.6.L93.B0',
-  VP8: 'vp8',
-  VP9: 'vp09.00.10.08',
-  AV1: 'av01.0.05M.08',
-};
+export async function probeEncoders(): Promise<EncoderCapabilities> {
+  return { video: await probeVideoEncoding(), audio: await probeAudioEncoding() };
+}
 
-const AUDIO_CODECS: Record<string, string> = {
-  AAC: 'mp4a.40.2',
-  Opus: 'opus',
-  MP3: 'mp3',
-  FLAC: 'flac',
-  Vorbis: 'vorbis',
-};
-
-/** Probe every capability this page reports on. */
+/** Probe every capability the diagnostic page reports on. */
 export async function probeCapabilities(): Promise<Capabilities> {
-  const videoEncode = await probeVideoEncoding();
+  const encoders = await probeEncoders();
   const videoDecode = await probeVideoDecoding();
-  const audioEncode = await probeAudioEncoding();
   const audioDecode = await probeAudioDecoding();
 
   return {
@@ -63,20 +65,30 @@ export async function probeCapabilities(): Promise<Capabilities> {
     offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
     imageDecoder: typeof (globalThis as { ImageDecoder?: unknown }).ImageDecoder !== 'undefined',
     heicNative: await probeHeic(),
-    videoEncode,
+    videoEncode: encoders.video,
+    audioEncode: encoders.audio,
     videoDecode,
-    audioEncode,
     audioDecode,
   };
 }
 
-async function probeVideoEncoding(): Promise<Record<string, boolean>> {
-  const Encoder = (globalThis as { VideoEncoder?: unknown }).VideoEncoder;
-  if (typeof Encoder !== 'function') return allFalse(VIDEO_CODECS);
+/** Codec strings for the list, skipping any the browser has no name for. */
+function codecStrings(ids: readonly CodecId[]): Array<[CodecId, string]> {
+  const out: Array<[CodecId, string]> = [];
+  for (const id of ids) {
+    const codec = CODECS[id]?.webcodecs;
+    if (codec) out.push([id, codec]);
+  }
+  return out;
+}
 
-  const out: Record<string, boolean> = {};
-  for (const [label, codec] of Object.entries(VIDEO_CODECS)) {
-    out[label] = await isSupported(Encoder, {
+async function probeVideoEncoding(): Promise<CodecTable> {
+  const Encoder = (globalThis as { VideoEncoder?: unknown }).VideoEncoder;
+  if (typeof Encoder !== 'function') return allFalse(PROBED_VIDEO_CODECS);
+
+  const out: CodecTable = {};
+  for (const [id, codec] of codecStrings(PROBED_VIDEO_CODECS)) {
+    out[id] = await isSupported(Encoder, {
       // Real dimensions and a real bitrate: a probe with placeholder values answers a
       // different question than the one being asked.
       codec,
@@ -89,24 +101,24 @@ async function probeVideoEncoding(): Promise<Record<string, boolean>> {
   return out;
 }
 
-async function probeVideoDecoding(): Promise<Record<string, boolean>> {
+async function probeVideoDecoding(): Promise<CodecTable> {
   const Decoder = (globalThis as { VideoDecoder?: unknown }).VideoDecoder;
-  if (typeof Decoder !== 'function') return allFalse(VIDEO_CODECS);
+  if (typeof Decoder !== 'function') return allFalse(PROBED_VIDEO_CODECS);
 
-  const out: Record<string, boolean> = {};
-  for (const [label, codec] of Object.entries(VIDEO_CODECS)) {
-    out[label] = await isSupported(Decoder, { codec });
+  const out: CodecTable = {};
+  for (const [id, codec] of codecStrings(PROBED_VIDEO_CODECS)) {
+    out[id] = await isSupported(Decoder, { codec });
   }
   return out;
 }
 
-async function probeAudioEncoding(): Promise<Record<string, boolean>> {
+async function probeAudioEncoding(): Promise<CodecTable> {
   const Encoder = (globalThis as { AudioEncoder?: unknown }).AudioEncoder;
-  if (typeof Encoder !== 'function') return allFalse(AUDIO_CODECS);
+  if (typeof Encoder !== 'function') return allFalse(PROBED_AUDIO_CODECS);
 
-  const out: Record<string, boolean> = {};
-  for (const [label, codec] of Object.entries(AUDIO_CODECS)) {
-    out[label] = await isSupported(Encoder, {
+  const out: CodecTable = {};
+  for (const [id, codec] of codecStrings(PROBED_AUDIO_CODECS)) {
+    out[id] = await isSupported(Encoder, {
       codec,
       sampleRate: 48000,
       numberOfChannels: 2,
@@ -116,13 +128,13 @@ async function probeAudioEncoding(): Promise<Record<string, boolean>> {
   return out;
 }
 
-async function probeAudioDecoding(): Promise<Record<string, boolean>> {
+async function probeAudioDecoding(): Promise<CodecTable> {
   const Decoder = (globalThis as { AudioDecoder?: unknown }).AudioDecoder;
-  if (typeof Decoder !== 'function') return allFalse(AUDIO_CODECS);
+  if (typeof Decoder !== 'function') return allFalse(PROBED_AUDIO_CODECS);
 
-  const out: Record<string, boolean> = {};
-  for (const [label, codec] of Object.entries(AUDIO_CODECS)) {
-    out[label] = await isSupported(Decoder, {
+  const out: CodecTable = {};
+  for (const [id, codec] of codecStrings(PROBED_AUDIO_CODECS)) {
+    out[id] = await isSupported(Decoder, {
       codec,
       sampleRate: 48000,
       numberOfChannels: 2,
@@ -167,6 +179,6 @@ async function probeHeic(): Promise<boolean> {
   }
 }
 
-function allFalse(codes: Record<string, string>): Record<string, boolean> {
-  return Object.fromEntries(Object.keys(codes).map((k) => [k, false]));
+function allFalse(ids: readonly CodecId[]): CodecTable {
+  return Object.fromEntries(ids.map((id) => [id, false])) as CodecTable;
 }
