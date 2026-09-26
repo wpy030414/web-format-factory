@@ -30,7 +30,10 @@ export default defineConfig({
       // lazily and cached on first use instead. See docs/DECISIONS.md.
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        globIgnores: ['**/engines/**', '**/*.wasm'],
+        // The app shell only. Everything fetched on demand — the WASM engines, the HEIC
+        // decoder, the optional audio encoders — is cached the first time it is used, so
+        // installing the app stays a small download no matter how many formats exist.
+        globIgnores: ['**/engines/**', '**/*.wasm', '**/assets/lazy/**'],
         runtimeCaching: [
           {
             // Content-hashed engine assets => safe to cache forever.
@@ -38,6 +41,17 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'wff-engines-v1',
+              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Lazily-split chunks (codec extensions, the HEIC decoder). Same reasoning as
+            // the engines: hashed, immutable, but too big to hand every visitor up front.
+            urlPattern: /\/assets\/lazy\/.*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'wff-lazy-chunks-v1',
               expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
               cacheableResponse: { statuses: [0, 200] },
             },
@@ -62,9 +76,55 @@ export default defineConfig({
   preview: {
     headers: crossOriginIsolationHeaders,
   },
+  optimizeDeps: {
+    // These are reached only through a dynamic `import()` at an engine boundary, or only
+    // from inside a Web Worker — which the dev server creates lazily, on the first file
+    // the user drops. Either way the server used to discover the dependency graph
+    // mid-session, re-bundle, and **reload the page**, discarding the files that had just
+    // been dropped in. Naming them here moves that work to startup, where nobody is
+    // holding anything.
+    include: [
+      // Worker-only: the media library and the codec extensions must stay out of the
+      // entry chunk, so the main thread never imports them. See docs/ARCHITECTURE.md.
+      'mediabunny',
+      'modern-gif',
+      'fflate',
+      '@ffmpeg/ffmpeg',
+      '@ffmpeg/util',
+      // Dynamic imports from inside the worker, for the routes that need them.
+      'heic-to',
+      '@mediabunny/mp3-encoder',
+      '@mediabunny/flac-encoder',
+      '@mediabunny/aac-encoder',
+    ],
+  },
   resolve: {
+    // `@mediabunny/*-encoder` registers itself with the engine through the bare
+    // specifier `mediabunny`. Two copies of that module in the graph would mean two
+    // registries, and registration would succeed into the one nothing ever reads — the
+    // failure being silent until a conversion fails with "not supported in this
+    // environment". pnpm's layout resolves them to one copy today; this makes it a rule
+    // rather than a coincidence.
+    dedupe: ['mediabunny'],
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+  worker: {
+    // ES module workers, which is what the client already asks for when it constructs
+    // one. Not cosmetic: the default `iife` format cannot have dynamic imports, so
+    // Rolldown **inlines** every lazy `import()` into a single worker bundle. Left at the
+    // default, the ~3 MB HEIC decoder and the ~1.6 MB of audio encoder extensions were
+    // folded into the worker chunk unconditionally — the laziness was real in the source
+    // and gone in the artifact.
+    format: 'es',
+    rollupOptions: {
+      output: {
+        // A worker is its own build, so this has to be repeated here rather than
+        // inherited from `build` below — and the worker is where every lazily-fetched
+        // chunk actually comes from.
+        chunkFileNames: 'assets/lazy/[name]-[hash].js',
+      },
     },
   },
   build: {
@@ -72,5 +132,13 @@ export default defineConfig({
     // Code splitting is driven by dynamic `import()` at the engine boundaries —
     // each engine (and each wasm kernel) is fetched only when a job actually needs it.
     // See docs/ARCHITECTURE.md.
+    rollupOptions: {
+      output: {
+        // Same rule for anything the main thread ever loads lazily: a recognisable
+        // directory, so the service worker can tell optional decoders apart from the app
+        // shell. Installing the PWA must not mean downloading all of them.
+        chunkFileNames: 'assets/lazy/[name]-[hash].js',
+      },
+    },
   },
 });

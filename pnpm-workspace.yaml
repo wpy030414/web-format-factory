@@ -4,3 +4,6 @@ minimumReleaseAgeExclude:
   - '@vitest/spy@5.0.2'
   - mediabunny@1.60.0
   - vitest@5.0.2
+  - '@mediabunny/aac-encoder@1.60.0'
+  - '@mediabunny/flac-encoder@1.60.0'
+  - '@mediabunny/mp3-encoder@1.60.0'
