@@ -16,15 +16,24 @@ export interface VideoTrackInfo {
   height: number;
   /** Rotation metadata in degrees, if any. */
   rotation?: number;
-  /** Can this browser actually decode it? Drives the `no-decoder-in-browser` refusal. */
-  decodable: boolean;
+  /**
+   * Can this browser actually decode it? Drives the `no-decoder-in-browser` refusal.
+   *
+   * Three states, not two. `false` is the browser refusing, which is an answer. `undefined`
+   * is the browser not answering at all — a thing it does to a page it does not consider
+   * visible — and it is *not* a refusal: reporting it as one silently closes routes the
+   * machine can actually run, which is the exact failure the refusal exists to prevent.
+   * See `DECODER_QUERY_MS` in `probe.ts`.
+   */
+  decodable?: boolean;
 }
 
 export interface AudioTrackInfo {
   codec: string;
   channels: number;
   sampleRate: number;
-  decodable: boolean;
+  /** Same three states as `VideoTrackInfo.decodable`, and for the same reason. */
+  decodable?: boolean;
 }
 
 /**

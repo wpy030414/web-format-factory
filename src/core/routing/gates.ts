@@ -190,6 +190,15 @@ function imageDecoderDoor({ profile, target, caps }: GateContext): ShutGate | nu
  * never disagree. Until this door existed the field was measured and then read by nobody:
  * the profile's comment promised a `no-decoder-in-browser` refusal that no code produced.
  *
+ * The question has three outcomes, and only two of them may shut this door. `false` is
+ * the browser refusing; `true` is it agreeing; `undefined` is it never answering at all,
+ * which it does for a page it does not consider visible. Silence is not a refusal —
+ * treating it as one would close routes this machine can run, which is the mirror image
+ * of the failure a door exists to prevent — so an unanswered question leaves the route
+ * open, and a job that really cannot be decoded fails late carrying the engine's own
+ * error. That is the trade this door takes deliberately: a route that fails loudly beats
+ * a route that never appears and says the wrong thing about why.
+ *
  * Three exclusions, each because a door that fires too wide disables routes that work —
  * the mirror image of the failure doors exist to prevent:
  *
@@ -209,7 +218,7 @@ function decoderDoor({ profile, target, verdict, copyable }: GateContext): ShutG
     ...(spec.codecs.audio?.length ? profile.audioTracks : []),
   ];
 
-  const blocked = needed.find((track) => !track.decodable);
+  const blocked = needed.find((track) => track.decodable === false);
   if (!blocked) return null;
 
   return { reason: 'no-decoder-in-browser', detail: codecLabel(blocked.codec) };

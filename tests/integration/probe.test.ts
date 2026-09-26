@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { probe } from '@/core/probe/probe.ts';
 import { describeProfile } from '@/core/probe/profile.ts';
 import type { MediaClass } from '@/core/types.ts';
@@ -212,4 +212,28 @@ describe('probe — always answers', () => {
     expect(p.size).toBe(4096);
   });
 
+  it(
+    'answers for a video whose decoder check never comes back',
+    async () => {
+      // The media pipeline stops answering for a page the browser does not consider
+      // visible. The query does not fail — it never returns — and an unbounded await on
+      // it is what leaves the card spinning. Deliberately stubbed at the API the probe
+      // actually reaches for, rather than mocked at a seam of our own making.
+      if (!haveFixtures) return;
+      vi.stubGlobal('VideoDecoder', { isConfigSupported: () => new Promise(() => {}) });
+      try {
+        const p = await profileOf('av.mp4');
+        // The identification still completes; only the one field we could not establish
+        // is left unstated — and unstated is *not* the same as "no", because the answer
+        // feeds a refusal that would remove routes this machine can actually run.
+        expect(p.mediaClass).toBe('video');
+        expect(p.videoTracks[0]?.codec).toBe('avc');
+        expect(p.videoTracks[0]?.decodable).toBeUndefined();
+        expect(p.videoTracks[0]?.width).toBe(64);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+    15_000,
+  );
 });

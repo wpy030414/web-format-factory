@@ -417,6 +417,22 @@ describe('planFor — 门落在计划上，而不是路由表上', () => {
     expect(reencode.impossibility?.detail).toBe('H.265');
   });
 
+  it('没答上来的解码问题不算拒绝——路线照常开放', () => {
+    // The third state of `decodable`. `undefined` is the browser not answering, which it
+    // does for a page it does not consider visible; only `false` is a refusal. Reading
+    // silence as "no" would remove a conversion this machine can run and give a reason
+    // that is not true — so the route stays open, and a job that really cannot be decoded
+    // fails late carrying the engine's own error instead.
+    const unanswered: MediaProfile = {
+      ...unplayable,
+      videoTracks: [{ codec: 'hevc', width: 1920, height: 1080, decodable: undefined }],
+    };
+
+    expect(planFor(unanswered, 'webm', FULL).feasible).toBe(true);
+    // The door has not been defused: a real refusal still shuts it.
+    expect(planFor(unplayable, 'webm', FULL).feasible).toBe(false);
+  });
+
   it('点名一个本机编不出来的编码，计划随之不可行', () => {
     // The end-to-end shape of the door: the same file and the same target, decided by the
     // codec the user named and by what this machine can do about it.

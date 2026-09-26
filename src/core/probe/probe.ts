@@ -1,6 +1,7 @@
 import { ALL_FORMATS, BlobSource, Input, type InputTrack } from 'mediabunny';
 
 import type { ContainerId } from '../types.ts';
+import { withDeadline } from '../deadline.ts';
 import { detectMotionPhoto, unpackLivp } from '../../livephoto/detect.ts';
 import { extractXmp } from '../../livephoto/xmp.ts';
 import { classify } from './classify.ts';
@@ -32,6 +33,25 @@ const SNIFF_WINDOW = SNIFF_BYTES;
  * read before we conclude it holds only one frame.
  */
 const ANIMATION_WINDOW = 4 * 1024 * 1024;
+
+/**
+ * How long a decoder-capability query may take before we stop waiting for it.
+ *
+ * `canDecode` is the probe's one call into the browser's media pipeline — everything else
+ * here is arithmetic on bytes we already hold. The media pipeline is torn down for a page
+ * the browser does not consider visible, and the query does not fail when that happens;
+ * it never answers. An honest answer takes single-digit milliseconds, so five seconds is
+ * several hundred times the real cost: it is sized so that a merely slow machine still
+ * gets its answer, and only a pipeline that has stopped talking at all runs out of time.
+ *
+ * What a timeout produces matters more than the number. It produces `undefined` — "not
+ * established" — and deliberately *not* `false`. `false` is the browser refusing, and it
+ * shuts routes through `decoderDoor`; answering it for a question nobody answered would
+ * quietly remove conversions this machine can run, with a reason that is not true. The
+ * cost of the honest answer is at worst one option that fails late with the engine's own
+ * error; the cost of the dishonest one is an option that never appears.
+ */
+const DECODER_QUERY_MS = 5000;
 
 /** The message from whatever was thrown, which is a string more often than an Error. */
 function messageOf(cause: unknown): string {
@@ -293,7 +313,13 @@ async function readVideoTrack(track: InputTrack): Promise<VideoTrackInfo> {
   const width = await v.getSquarePixelWidth().catch(() => v.getCodedWidth().catch(() => 0));
   const height = await v.getSquarePixelHeight().catch(() => v.getCodedHeight().catch(() => 0));
   const rotation = await v.getRotation().catch(() => 0);
-  const decodable = await v.canDecode().catch(() => false);
+  // Two different failures, kept apart: `.catch` handles the browser *refusing* ("no"),
+  // and the deadline handles it going quiet ("no answer"). See DECODER_QUERY_MS.
+  const decodable = await withDeadline(
+    v.canDecode(),
+    DECODER_QUERY_MS,
+    () => undefined,
+  ).catch(() => false);
   return {
     codec,
     width,
@@ -313,6 +339,11 @@ async function readAudioTrack(track: InputTrack): Promise<AudioTrackInfo> {
   const codec = (await a.getCodec().catch(() => null)) ?? 'unknown';
   const channels = await a.getNumberOfChannels().catch(() => 0);
   const sampleRate = await a.getSampleRate().catch(() => 0);
-  const decodable = await a.canDecode().catch(() => false);
+  // Same two failures as the video track's, kept apart the same way — see DECODER_QUERY_MS.
+  const decodable = await withDeadline(
+    a.canDecode(),
+    DECODER_QUERY_MS,
+    () => undefined,
+  ).catch(() => false);
   return { codec, channels, sampleRate, decodable };
 }
