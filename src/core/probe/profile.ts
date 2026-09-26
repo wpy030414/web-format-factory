@@ -10,6 +10,22 @@ import type { LivePhotoFlavor } from '../../livephoto/detect.ts';
  * `probe.ts`, which only the worker imports.
  */
 
+/**
+ * Frame-rate facts about a video track.
+ *
+ * Measured from the track's real packet timestamps, never read from container metadata,
+ * which lies. The three fields are the three questions a timing rule has to ask: how fast
+ * is it on average, how fast is it at its fastest, and is it uniform at all.
+ */
+export interface FrameRateFacts {
+  /** Frames per second, averaged over the packets that were probed. */
+  average: number;
+  /** From the *tightest* gap — the fastest instant in the track, not its typical speed. */
+  max: number;
+  /** True only for a constant-rate track with no skipped frames. */
+  constant: boolean;
+}
+
 export interface VideoTrackInfo {
   codec: string;
   width: number;
@@ -26,6 +42,13 @@ export interface VideoTrackInfo {
    * See `DECODER_QUERY_MS` in `probe.ts`.
    */
   decodable?: boolean;
+  /**
+   * How fast this track runs, when it could be measured.
+   *
+   * Absent is not the same as "no frames": it means the measurement did not happen, and
+   * every rule that reads this must tolerate not knowing rather than assume a rate.
+   */
+  frameRate?: FrameRateFacts;
 }
 
 export interface AudioTrackInfo {

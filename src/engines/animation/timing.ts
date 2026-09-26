@@ -1,3 +1,6 @@
+import { GIF_FRAME_TIMING } from '../../core/registry/formats.ts';
+import type { FrameRateFacts } from '../../core/probe/profile.ts';
+
 /**
  * GIF frame timing.
  *
@@ -7,21 +10,26 @@
  * 1. The floor is 20 ms, not 10. Renderers have clamped anything shorter to 100 ms since
  *    the Netscape era, so a 10 ms frame is not a fast frame — it is a frame that plays for
  *    a tenth of a second. 50 fps is therefore the fastest a GIF can honestly play.
- *    See `docs/researches/gif-frame-timing.md`.
  * 2. The encoder floors. `modern-gif` writes `delay / 10` into the centisecond field, so a
  *    delay that is not a whole number of 10 ms steps is silently rounded *down*. Every
  *    value this module produces is therefore snapped to that grid — which also makes the
  *    rounding a no-op rather than a slow, systematic drift.
  *
- * Deliberately pure and free of any import: the arithmetic is the part that was wrong, and
- * it is the part worth testing without a browser, a decoder or an encoder in the way.
+ * Deliberately free of anything that needs a browser — no decoder, no canvas, no encoder.
+ * The arithmetic is the part that was wrong, and it is the part worth testing on its own.
+ * See `docs/researches/gif-frame-timing.md` for the measurements.
  */
 
-/** The grid GIF delays live on: one centisecond. */
-export const GIF_DELAY_GRID_MS = 10;
+/**
+ * The grid GIF delays live on, and the floor renderers honour.
+ *
+ * Read from the format's own declaration rather than written out again here: the loss
+ * model describes the same capability, and two copies of a number like this is how the
+ * engine and the report end up disagreeing. See `GIF_FRAME_TIMING`.
+ */
+export const GIF_DELAY_GRID_MS = GIF_FRAME_TIMING.gridMs;
 
-/** The shortest delay a renderer will actually honour — see the header. */
-export const GIF_MIN_DELAY_MS = 20;
+export const GIF_MIN_DELAY_MS = GIF_FRAME_TIMING.floorMs;
 
 /** A 16-bit centisecond count is the most a graphic control extension can hold. */
 export const GIF_MAX_DELAY_MS = 65_535 * GIF_DELAY_GRID_MS;
@@ -60,16 +68,6 @@ export function delaySecondsForVideo(delayMs: number): number {
 }
 
 /* ------------------------------------------------------------------ what we measured */
-
-/** Frame-rate facts as measured from real packet timestamps. */
-export interface FrameRateFacts {
-  /** Frames per second averaged over the probed packets. */
-  average: number;
-  /** Derived from the *tightest* gap — i.e. the fastest instant in the track. */
-  max: number;
-  /** True only for a constant-rate track with no skipped frames. */
-  constant: boolean;
-}
 
 /**
  * How to lay a source's frames onto a timeline GIF can hold.

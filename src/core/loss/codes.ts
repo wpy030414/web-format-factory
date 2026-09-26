@@ -136,6 +136,17 @@ export function severityOf(code: LossCode): LossSeverity {
   return SEVERITY[code];
 }
 
+/**
+ * Every code, at runtime.
+ *
+ * A union type cannot be walked, and the one thing worth asserting about this set — that no
+ * code is defined, given copy in the UI, and then never produced by anything — needs to be.
+ * Derived from the severity table rather than written out again: that table is exhaustive
+ * over the union, so a new code cannot reach this list without also being given a severity,
+ * and cannot be given a severity without this list noticing.
+ */
+export const LOSS_CODES = Object.keys(SEVERITY) as readonly LossCode[];
+
 /** Codecs that are lossless by construction. Everything else loses data on encode. */
 const LOSSLESS_CODECS: ReadonlySet<CodecId> = new Set<CodecId>([
   'flac',

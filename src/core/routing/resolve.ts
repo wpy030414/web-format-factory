@@ -1,6 +1,6 @@
 import { computeFidelity, computeLosses, requiresAcknowledgement } from '../loss/fidelity.ts';
 import type { LossItem } from '../loss/codes.ts';
-import { changedParams, getFormat } from '../registry/formats.ts';
+import { changedParams, getFormat, type FormatSpec } from '../registry/formats.ts';
 import type { MediaProfile } from '../probe/profile.ts';
 import type { ContainerId, Fidelity, FormatId, RouteShape } from '../types.ts';
 import { IMPOSSIBILITY_COPY, type Impossibility } from './impossibility.ts';
@@ -161,7 +161,14 @@ export function planFor(
     sourceHasAlpha: profile.hasAlpha === true,
     targetSupportsAlpha: spec.traits.alpha !== 'none',
     sourceAudioTracks: profile.audioTracks.length,
-    targetMaxAudioTracks: spec.traits.multitrack ? 8 : profile.audioTracks.length > 0 ? 1 : 0,
+    targetMaxAudioTracks: holdsAudio(spec) ? (spec.traits.multitrack ? 8 : 1) : 0,
+    // Frame timing, for the targets that have none of their own. Both sides are facts
+    // about *this* file and *this* target, so neither can fire on a conversion it does not
+    // describe: a container with exact timestamps has no timing to lose, and a track whose
+    // rate could not be measured produces no claim about its rate.
+    ...(spec.traits.frameTiming ? { targetFrameTiming: spec.traits.frameTiming } : {}),
+    ...(sourceVideo?.frameRate ? { sourceFrameRate: sourceVideo.frameRate } : {}),
+    selectsSingleFrame: verdict.kind === 'project' && verdict.projector === 'keyframe',
   });
 
   const fidelity = computeFidelity({
@@ -182,6 +189,20 @@ export function planFor(
     did: copyable ? 'transmux' : 'transcode',
     needsAcknowledgement: requiresAcknowledgement(losses),
   };
+}
+
+/**
+ * Can this target hold an audio track at all?
+ *
+ * Asked because the old expression — "not multitrack, and the source has audio" — read as
+ * room for exactly one track, so a video with a soundtrack became a silent GIF, a silent
+ * JPEG and a silent PNG without a word to anyone.
+ *
+ * Asked of the family rather than of `codecs.audio`, which the paired Live Photo forms
+ * leave empty even though their video half carries the source's audio perfectly well.
+ */
+function holdsAudio(spec: FormatSpec): boolean {
+  return spec.family !== 'image';
 }
 
 /**

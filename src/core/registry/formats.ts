@@ -86,6 +86,23 @@ export interface FormatTraits {
   losslessMode: boolean;
   /** Does it carry a non-trivial metadata container? */
   metadata: boolean;
+  /**
+   * The timing a frame sequence can be given, for a format that cannot hold any timing of
+   * its own. Absent means "whatever the source says" — a video container carries exact
+   * timestamps, so nothing is lost there and there is nothing to declare.
+   *
+   * Both numbers matter and they are not the same number: a delay can only be *stored* on
+   * the grid, but a renderer may refuse to honour anything beneath a floor of its own.
+   */
+  frameTiming?: FrameTiming;
+}
+
+/** How finely a target can place a frame in time. */
+export interface FrameTiming {
+  /** The step delays are stored in, in milliseconds. */
+  gridMs: number;
+  /** The shortest delay a *renderer* will honour, in milliseconds. */
+  floorMs: number;
 }
 
 export interface FormatSpec {
@@ -229,6 +246,21 @@ const webpAnim: FormatSpec = {
   note: 'Encoding requires the fallback engine — a ~31 MB one-time download.',
 };
 
+/**
+ * The timing a GIF can hold.
+ *
+ * Delays are stored as a 16-bit count of centiseconds, so 10 ms is the grid. But a
+ * renderer has stretched anything under 20 ms to 100 ms since the Netscape era — a
+ * compatibility rule every browser still keeps — which makes 20 ms the floor and 50 fps
+ * the fastest a GIF can honestly play. Anything faster has to be conformed to it, and
+ * conforming is a loss, which is what the frame-timing rules in the loss model are for.
+ *
+ * One copy, read by both sides: the engine that writes a GIF's timing and the loss model
+ * that describes it are asking about the same capability, and two copies of a number like
+ * this is how they end up disagreeing. See `docs/researches/gif-frame-timing.md`.
+ */
+export const GIF_FRAME_TIMING: FrameTiming = { gridMs: 10, floorMs: 20 };
+
 const gif: FormatSpec = {
   id: 'gif',
   label: 'GIF',
@@ -244,6 +276,7 @@ const gif: FormatSpec = {
     multitrack: false,
     losslessMode: false,
     metadata: false,
+    frameTiming: GIF_FRAME_TIMING,
   },
   params: [
     QUALITY,
@@ -272,7 +305,7 @@ const gif: FormatSpec = {
       advanced: true,
     },
   ],
-  note: 'Only 256 colours and 10 ms timing granularity.',
+  note: 'Only 256 colours and 10 ms timing granularity, so 50 fps is the fastest it can play.',
 };
 
 const LIVE_PARAMS: readonly ParamSpec[] = [

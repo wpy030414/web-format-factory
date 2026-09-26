@@ -308,6 +308,11 @@ async function readVideoTrack(track: InputTrack): Promise<VideoTrackInfo> {
     getCodedHeight(): Promise<number>;
     getRotation(): Promise<number>;
     canDecode(): Promise<boolean>;
+    computeFrameRateMetrics(): Promise<{
+      averageFrameRate: number;
+      maxFrameRate: number;
+      frameRateIsConstant: boolean;
+    }>;
   };
   const codec = (await v.getCodec().catch(() => null)) ?? 'unknown';
   const width = await v.getSquarePixelWidth().catch(() => v.getCodedWidth().catch(() => 0));
@@ -320,12 +325,31 @@ async function readVideoTrack(track: InputTrack): Promise<VideoTrackInfo> {
     DECODER_QUERY_MS,
     () => undefined,
   ).catch(() => false);
+
+  // Frame-rate facts for the loss model, from the track's real packet timestamps — never
+  // from the container's claim, which lies. The library's own default of probing 256
+  // packets is enough to tell a constant 60 fps track from a variable one, and costs a
+  // couple of milliseconds without decoding anything.
+  //
+  // A failure leaves the field out rather than guessing a rate: a rule that fires on an
+  // assumed frame rate is a warning about a file it may have nothing to do with.
+  const metrics = await v.computeFrameRateMetrics().catch(() => undefined);
+
   return {
     codec,
     width,
     height,
     ...(rotation ? { rotation } : {}),
     decodable,
+    ...(metrics
+      ? {
+          frameRate: {
+            average: metrics.averageFrameRate,
+            max: metrics.maxFrameRate,
+            constant: metrics.frameRateIsConstant,
+          },
+        }
+      : {}),
   };
 }
 
