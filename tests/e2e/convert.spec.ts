@@ -631,3 +631,37 @@ test.describe('兜底引擎', () => {
     expect(tags).toContain('com.apple.quicktime.content.identifier');
   });
 });
+
+test.describe('能力诊断页', () => {
+  test('从页脚进入，并报告真实的探测结果', async ({ page }) => {
+    await page.goto('/');
+    await page.getByRole('link', { name: /本机能力诊断/ }).click();
+
+    await expect(page.getByRole('heading', { name: '本机能力诊断' })).toBeVisible();
+    // The probe is async; wait for the report rather than the spinner.
+    await expect(page.getByText('跨源隔离（COOP/COEP）')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('已开启')).toBeVisible();
+  });
+
+  test('列出各编码的实测可用性', async ({ page }) => {
+    await page.goto('/#/capabilities');
+    await expect(page.getByText('视频编码')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('音频编码')).toBeVisible();
+    // Codec names come from the probe tables, not from a static list. Each appears in
+    // both the encode and the decode table, hence `.first()`.
+    await expect(page.getByText('H.264', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Opus', { exact: true }).first()).toBeVisible();
+  });
+
+  test('把探测结果翻译成「这对应用意味着什么」', async ({ page }) => {
+    await page.goto('/#/capabilities');
+    // A page of green ticks is not actionable on its own; the consequences are.
+    await expect(page.getByText('这些结果意味着什么')).toBeVisible({ timeout: 20_000 });
+  });
+
+  test('可以回到转换器', async ({ page }) => {
+    await page.goto('/#/capabilities');
+    await page.getByRole('link', { name: /返回转换器/ }).click();
+    await expect(page.getByRole('heading', { name: 'Web Format Factory' })).toBeVisible();
+  });
+});

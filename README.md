@@ -62,11 +62,14 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 编码参数界面：由各格式自己声明的参数表渲染，改设置会改变代价判定，并真的传到编码器
 - 转换 Worker 与调度，主线程不卡
 - 可用界面：拖拽 → 识别 → 选目标 → 代价清单 → 转换 → 下载
-- 测试：单元与集成 161 项，Playwright 端到端 32 项，产物一律交给 ffprobe 校验
+- 诊断页 `#/capabilities`：实测本机的跨源隔离、编解码器可用性、原生 HEIC 支持，
+  并翻译成「这对应用意味着什么」
+- 部署配置样例：`deploy/nginx.conf.sample` 与 `deploy/Caddyfile.sample`
+- 测试：单元与集成 161 项，Playwright 端到端 36 项，产物一律交给 ffprobe 校验
 
 尚未完成：
 
-- `/capabilities` 诊断页与部署配置样例（nginx / Caddy 的 COOP/COEP）
+（主要格式线、动图、Live Photo 双向、编码参数、诊断页均已完成）
 - 编码参数的界面（`params` 目前为默认值）
 - 部署配置与 `/capabilities` 诊断页
 

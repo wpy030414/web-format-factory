@@ -1,11 +1,36 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Play, Download, Trash2, Loader2, ShieldCheck } from 'lucide-react';
 import { planFor } from '@/core/routing/resolve.ts';
 import { useStore } from '@/state/store.ts';
 import { Dropzone } from '@/ui/dropzone.tsx';
 import { FileCard } from '@/ui/file-card.tsx';
+import { CapabilitiesPage } from '@/ui/capabilities.tsx';
+import { Activity } from 'lucide-react';
+
+/**
+ * A one-line router.
+ *
+ * Hash-based on purpose: a path-based route would need a server rewrite rule on every
+ * host this is deployed to, and the diagnostic page must not be the thing that breaks
+ * on a misconfigured server — it is what you visit when something is broken.
+ */
+function useRoute(): string {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  return hash;
+}
 
 export function App() {
+  const route = useRoute();
+  if (route === '#/capabilities') return <CapabilitiesPage />;
+  return <Converter />;
+}
+
+function Converter() {
   const files = useStore((s) => s.files);
   const running = useStore((s) => s.running);
   const addFiles = useStore((s) => s.addFiles);
@@ -137,6 +162,13 @@ export function App() {
       <footer className="text-muted-foreground border-border mt-10 flex items-center gap-1.5 border-t pt-5 text-xs">
         <ShieldCheck className="size-3.5 shrink-0" />
         没有上传，没有服务器，没有账户。关掉页面，一切就消失了。
+        <a
+          href="#/capabilities"
+          className="hover:text-foreground ml-auto inline-flex items-center gap-1"
+        >
+          <Activity className="size-3" />
+          本机能力诊断
+        </a>
       </footer>
     </div>
   );

@@ -1,0 +1,38 @@
+# Web Format Factory — Caddy 配置示例
+#
+# Caddy 的好处是证书与 HTTP/2、HTTP/3 全部自动处理，配置比 nginx 短得多。
+# 但下面那两条响应头同样不能省——缺了它们，兜底引擎会静默挂起而不是报错。
+
+format.example.com {
+	root * /var/www/web-format-factory/dist
+	encode zstd gzip
+
+	# ------------------------------------------------------ 跨源隔离（必需）
+	#
+	# 只有兜底引擎（ffmpeg.wasm 多线程核心）需要跨源隔离。
+	# 没有它时 `FFmpeg.load()` 既不 resolve 也不 reject，界面会永远停在「转换中」。
+	header {
+		Cross-Origin-Opener-Policy   "same-origin"
+		Cross-Origin-Embedder-Policy "require-corp"
+		Cross-Origin-Resource-Policy "same-origin"
+	}
+
+	# ------------------------------------------------------------ 缓存策略
+	# 带内容哈希的构建产物：永久缓存。
+	@hashed path /assets/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+
+	# 引擎资源文件名固定，改成长缓存会让升级后仍用旧 wasm。
+	@engines path /engines/*
+	header @engines Cache-Control "public, max-age=604800"
+
+	# Service Worker 缓存住就无法升级。
+	@sw path /sw.js
+	header @sw Cache-Control "no-cache, no-store, must-revalidate"
+
+	# wasm 的 MIME 类型 Caddy 已内置，无需额外声明。
+
+	# 哈希路由，不需要 SPA 重写；若要支持真实路径再加 try_files。
+	try_files {path} /index.html
+	file_server
+}

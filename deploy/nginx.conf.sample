@@ -1,0 +1,107 @@
+# Web Format Factory — nginx 站点配置示例
+#
+# 这个文件不是「顺手附上的参考」，其中两条响应头是功能性的：
+# 少了它们，兜底引擎（ffmpeg.wasm）不会报错，而是**静默挂起**。
+# 症状是点了转换之后界面卡在「转换中」永不结束——所以请照抄，不要凭印象省。
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name format.example.com;
+
+    # ssl_certificate     /etc/letsencrypt/live/format.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/format.example.com/privkey.pem;
+
+    root /var/www/web-format-factory/dist;
+    index index.html;
+
+    # ------------------------------------------------------------------ 压缩
+    gzip on;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_vary on;
+    # application/wasm 必须在列表里：兜底引擎的核心解压前有 31MB，
+    # 压缩后约 9–11MB，值不值得开是显而易见的。
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/wasm
+        image/svg+xml;
+
+    # 若编了 brotli 模块，wasm 还能再小一些；nginx 官方源不含此模块，
+    # 没有就删掉这一段。
+    # brotli on;
+    # brotli_comp_level 5;
+    # brotli_types application/wasm application/javascript text/css application/json image/svg+xml;
+
+    # ------------------------------------------------- 跨源隔离（必需）
+    #
+    # 只有兜底引擎需要它们；主干与图像两层不需要。
+    # 缺失时应用仍然可用，只是失去兜底引擎——但用户不会知道原因，
+    # 因为 `FFmpeg.load()` 在非隔离环境下是挂起而非拒绝。
+    #
+    # `always` 不能省：否则 4xx/5xx 响应不带这两个头，隔离状态会被中断。
+    add_header Cross-Origin-Opener-Policy   "same-origin"  always;
+    add_header Cross-Origin-Embedder-Policy "require-corp" always;
+    # require-corp 之下，所有子资源都必须声明 CORP 或 CORS。
+    # 本站资源全部同源，所以同源即可。
+    add_header Cross-Origin-Resource-Policy "same-origin"  always;
+
+    # ------------------------------------------------------------ 静态资源
+    #
+    # 带内容哈希的构建产物可以永久缓存。
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        # add_header 不会继承，所以要重复声明隔离头。
+        add_header Cross-Origin-Opener-Policy   "same-origin"  always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin"  always;
+        try_files $uri =404;
+    }
+
+    # 兜底引擎的资源文件名是固定的（不带内容哈希），因此不能永久缓存——
+    # 否则升级后浏览器会一直用旧的 wasm。七天是一个折中：
+    # 足够省流量，又不至于让一次升级等上一年。
+    #
+    # 若想彻底避免这个问题，可在构建期给这些文件加上版本目录，
+    # 例如 /engines/ffmpeg-0.12.10/ffmpeg-core.wasm。
+    location /engines/ {
+        types {
+            application/wasm wasm;
+        }
+        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cross-Origin-Opener-Policy   "same-origin"  always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin"  always;
+        try_files $uri =404;
+    }
+
+    # Service Worker 必须不被缓存，否则升级无法生效。
+    location = /sw.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+    }
+
+    location = /manifest.webmanifest {
+        types { application/manifest+json webmanifest; }
+        try_files $uri =404;
+    }
+
+    # 应用外壳：哈希路由，所以不需要服务端重写规则兜底。
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header Cross-Origin-Opener-Policy   "same-origin"  always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Cross-Origin-Resource-Policy "same-origin"  always;
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# 明文访问一律跳转到 HTTPS：跨源隔离只在安全上下文中生效。
+server {
+    listen 80;
+    server_name format.example.com;
+    return 301 https://$host$request_uri;
+}
