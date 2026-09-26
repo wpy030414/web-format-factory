@@ -171,9 +171,12 @@ test.describe('页面与语义边界', () => {
     await page.goto('/');
   });
 
-  test('渲染标题与隐私声明', async ({ page }) => {
+  test('渲染标题与项目外链', async ({ page }) => {
     await expect(page.getByRole('heading', { name: 'Web Format Factory' })).toBeVisible();
-    await expect(page.getByText('没有上传，没有服务器，没有账户')).toBeVisible();
+    await expect(page.getByRole('link', { name: /项目仓库/ })).toHaveAttribute(
+      'href',
+      'https://github.com/wpy030414/web-format-factory',
+    );
   });
 
   test('开发服务器下发了跨源隔离响应头', async ({ page }) => {
