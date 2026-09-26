@@ -26,9 +26,16 @@ export type FileStatus = 'probing' | 'ready' | 'queued' | 'running' | 'done' | '
 /** How the app lands finished results to free memory. */
 export type DrainMode = 'none' | 'folder' | 'idb';
 
+/**
+ * A view of the original file that keeps only what the card needs after the bytes are
+ * no longer in memory.
+ */
+export type SlimFile = { name: string; size: number };
+
 export interface FileEntry {
   id: string;
-  file: File;
+  /** The original input. After `evictInputFile()` it is a plain name+size record. */
+  file: File | SlimFile;
   profile: MediaProfile | null;
   status: FileStatus;
   target: FormatId | null;
@@ -317,10 +324,12 @@ export const useStore = create<State>((set, get) => {
     }));
 
     try {
+      // file is always a real File at this point — eviction only happens after drain.
+      const inputFile = entry.file as File;
       const outcome: ConvertOutcome = await engine().convert({
         jobId: entry.id,
-        file: entry.file,
-        fileName: entry.file.name,
+        file: inputFile,
+        fileName: inputFile.name,
         target,
         params,
         onProgress: (progress) => reportProgress(entry.id, progress),
@@ -400,7 +409,8 @@ export const useStore = create<State>((set, get) => {
     await Promise.all(
       entries.map(async (entry) => {
         try {
-          const profile = await client.probe(entry.file, entry.file.name);
+          const inputFile = entry.file as File;
+          const profile = await client.probe(inputFile, inputFile.name);
           set((s) => {
             const files = s.files.map((f) =>
               f.id === entry.id
@@ -438,24 +448,29 @@ export const useStore = create<State>((set, get) => {
   /**
    * Release the result blob for one entry, keeping the name and size so the card can
    * still show what was produced. Callers have already landed the blob elsewhere.
+   *
+   * Also releases the original input file. After the result has been safely written to
+   * disk or IDB, the input bytes are only needed for display (name + size).
    */
   const evictResult = (id: string): void => {
     set((s) => ({
-      files: s.files.map((f) =>
-        f.id === id && f.result
-          ? {
-              ...f,
-              drained: true,
-              result: {
-                outputs: f.result.outputs.map((o) => ({
-                  name: o.name,
-                  size: o.size,
-                  blob: undefined as unknown as Blob,
-                })),
-              },
-            }
-          : f,
-      ),
+      files: s.files.map((f) => {
+        if (f.id !== id || !f.result) return f;
+        // Drop the input File's bytes, keep name + size for the card.
+        const slim: SlimFile = { name: f.file.name, size: f.file.size };
+        return {
+          ...f,
+          file: slim,
+          drained: true,
+          result: {
+            outputs: f.result.outputs.map((o) => ({
+              name: o.name,
+              size: o.size,
+              blob: undefined as unknown as Blob,
+            })),
+          },
+        };
+      }),
     }));
   };
 
@@ -830,8 +845,8 @@ async function mergePair(
   matchedBy: 'identifier' | 'filename' | 'manual',
 ): Promise<boolean> {
   try {
-    const still = new Uint8Array(await stillEntry.file.arrayBuffer());
-    const video = new Uint8Array(await videoEntry.file.arrayBuffer());
+    const still = new Uint8Array(await (stillEntry.file as File).arrayBuffer());
+    const video = new Uint8Array(await (videoEntry.file as File).arrayBuffer());
     const { bytes } = buildLivp(still, video);
 
     const id = stillEntry.id;
@@ -856,7 +871,11 @@ async function mergePair(
                   otherTrackCount: 0,
                 },
                 target: f.target ?? 'mp4',
-                paired: { still: stillEntry.file, video: videoEntry.file, matchedBy },
+                paired: {
+                  still: stillEntry.file as File,
+                  video: videoEntry.file as File,
+                  matchedBy,
+                }
               }
             : f,
         ),
