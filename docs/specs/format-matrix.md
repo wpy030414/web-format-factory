@@ -34,7 +34,7 @@
 | JPEG | JFIF/EXIF | 静图 | 无 | 否 | alpha 输入必须声明降级 |
 | PNG / APNG | PNG | 静图 / 动图 | 完整 | 支持 | APNG 体积通常远大于 GIF |
 | WebP / 动态 WebP | RIFF | 静图 / 动图 | 完整 | 支持 | **动态编码需兜底引擎** |
-| GIF | GIF89a | 动图 | 二值 | 必须 | 256 色 + 10 ms 时间粒度 |
+| GIF | GIF89a | 动图 | 二值 | 必须 | 256 色 + 10 ms 时间粒度（渲染器只认到 20 ms，故上限 50 fps） |
 | MP4 | ISO-BMFF (`isom`/`mp42`) | 视频 | 无 | 否 | 不支持多音轨 |
 | MOV | ISO-BMFF (`qt  `) | 视频 | 无 | 否 | Live Photo 的载体 |
 | MKV | EBML `matroska` | 视频 | 无 | 否 | 最宽松；源 MKV 的额外轨道可能被丢弃 |
