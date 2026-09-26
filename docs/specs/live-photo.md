@@ -98,7 +98,19 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
    `keys`/`ilst`，`ffprobe` 读不到，而且**不报错**。
    为什么不走主干引擎，见 `docs/DECISIONS.md` ADR-004——那里有一次被实测推翻的推断记录。
 
-3. **静图侧标识不写**——与 `still-image-time` 同一类问题，只是更早一步被发现。
+3. **静图侧标识写在 EXIF MakerNote 的 key 17 上。**（2026-09-26 由真机实测定论，全过程见
+   `docs/researches/live-photo-photos-import.md`。）
+
+   这一条此前写的是「不写」，理由是：两份来源说 Apple 写在 MakerNote，而我们的探测器从 XMP
+   读，且手上没有真产物可对照，所以「不照着改」。**实测把这个问题结掉了**——相册只认
+   MakerNote 那一侧：静图带 XMP 标识配不上，带 MakerNote 标识才配得上。于是两端都改了：
+
+   - **写入**：`src/livephoto/apple.ts` 构造 Apple 的 MakerNote（字节与 Core Graphics 的
+     产物逐字节对齐），key 17 放配对标识；
+   - **读取**：同一个模块负责从 MakerNote 读回。XMP 那条路仍在（Google 那套要用它），
+     但它不再是 Apple 配对标识的正解。
+
+   以下是当时那段推理，保留下来作为记录：
 
    我们的探测器从静图 XMP 的 `apple:ContentIdentifier` 读取配对标识（`readStillIdentifier`）。
    但两份相互独立的来源（LimitPoint 的 LivePhoto 库文档、那份被广泛转载的格式分析）都说
@@ -131,9 +143,10 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
    断言**多出一条 `mebx` 轨道**、其键为 `still-image-time`、且既有的视频轨道与
    content identifier 一个不少。`ffprobe` 能读 `mebx` 轨道，所以结构有效性是可验证的；
    **Apple 设备是否接受，在这台机器上无法验证**，这一点必须写进交付说明，不得含糊过去。
-5. 目标是 `.livp` 时用 **`level: 0`（不压缩）** 打包——对已压缩媒体再压缩毫无收益，存储则是瞬时的。
-6. **默认输出 `.livp`**，次选「两个文件」。UI 须如实说明：浏览器生成的 Live Photo
-   导入 Photos.app 并不可靠；`.livp` 可通过 AirDrop/存储后导入。
+5. **输出是成对的两个文件，不是 `.livp`。**容器那条路已被实测否掉：macOS 没有它的 UTI，
+   `Photos` 不收；iOS 亦然。要进相册的就是这两个文件——一起导入 macOS 相册之后，它才成为
+   一张实况照片，也才谈得上由相册隔空投送给 iPhone。落地方式（目录选择器 / 归档）见
+   `src/lib/save.ts`，完整链路见 `docs/researches/live-photo-photos-import.md` §7.1。
 
 ### 手写 XMP 写入器
 
@@ -152,7 +165,8 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 ## 输入 / 输出
 
 - **输入**：一个文件（`.livp` / Motion Photo / 成对拖入的两个文件）
-- **输出**：拆包时为静图 + 视频两个文件；封装时为 `.livp`（默认）或两个文件
+- **输出**：一律是静图 + 视频**两个文件**。`.livp` 容器不再提供——它导不进相册，这条已经
+  实测过（见上）。
 
 ## 约束
 
@@ -190,9 +204,9 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 | Apple 成对识别与拆包 | ✅ |
 | Google Motion Photo 识别与拆包 | ✅ |
 | Google Motion Photo 生成 | ✅ 端到端；**不需要兜底引擎** |
-| Apple `.livp` 打包 | ✅（用于已打标的 MOV） |
+| Apple `.livp` 打包 | ⛔ 不提供为输出——容器导不进相册，产物改成两个文件 |
 | Apple MOV 打标（content identifier） | ✅ 经兜底引擎写入，端到端已验证 |
-| Apple 静图侧标识 | ⛔ 不写；且读取端可能读错了字段，见上 |
+| Apple 静图侧标识 | ✅ 写入 MakerNote key 17，与视频侧同一个标识（实测见 `docs/researches/`） |
 | 视频或动图 → Live Photo（静帧取自来源首帧） | ✅ |
 | 多文件拖入的自动配对 | ✅ 优先按标识，退回文件名 |
 | 手动配对 / 解除配对 | ✅ 三种配对来源分别如实标注 |

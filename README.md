@@ -92,10 +92,10 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - **Apple 的 `still-image-time` 定时元数据轨道不写入**：语义已经查清，字节布局没有，
   而手上没有一份 Apple 亲自产出的 MOV 可作参照。理由与解锁条件见 `docs/DECISIONS.md`
   ADR-009——这是一次有意的取舍，不是遗漏。
-- **Apple 静图那一侧的配对标识既不写、也可能读错了字段**：写出的 `.livp` 只有 MOV 一侧带标识；
-  而我们的探测器从静图的 XMP 读它，两份独立来源却说 Apple 写在 EXIF MakerNote 里。
-  若属实则真实 Apple 文件的配对会退到文件名——而本项目自造的样本恰好写了 XMP 那个字段，
-  所以往返测试看不出差别。定论需要一份真实 Apple 静图，详见 `docs/specs/live-photo.md`。
+- **Live Photo 的输出是两个文件，不是 `.livp`**：那个容器导不进相册（macOS 与 iOS 都不认它），
+  成对的两个文件才是能进相册的形态——一起导入 macOS 相册后它成为一张实况照片，再由相册
+  隔空投送给 iPhone。首尾两端（静图的 MakerNote 标识、视频的 `moov/meta` 形态）已按实测补齐
+  并在真机上验收过；全过程见 `docs/researches/live-photo-photos-import.md`。
 - `deploy/` 下的 nginx 样例已经在真机上跑过一次（2026-09-26，nginx/1.28.3 Ubuntu），
   而真机咬到的第一口正是参考服务器**结构上覆盖不到**的那类：`location /engines/` 里那句
   `types { application/wasm wasm; }` 会把继承来的整张 MIME 表**换掉**，`.js` 因此以

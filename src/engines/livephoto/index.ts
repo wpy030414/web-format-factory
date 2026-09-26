@@ -9,7 +9,7 @@ import { severityOf, type LossItem } from '../../core/loss/codes.ts';
 import { sniff } from '../../core/probe/sniff.ts';
 import type { FormatId } from '../../core/types.ts';
 import { detectMotionPhoto, unpackLivp, type LivePhotoInfo } from '../../livephoto/detect.ts';
-import { buildLivp, buildMotionPhoto } from '../../livephoto/pack.ts';
+import { buildMotionPhoto } from '../../livephoto/pack.ts';
 import {
   readAppleMakerNoteIdentifier,
   relocateMovieMeta,
@@ -231,47 +231,38 @@ export class LivePhotoEngine implements Engine {
       }
     }
 
-    // 4. Package. Two shapes, and the difference is not cosmetic: the `.livp` is a single
-    //    file, but it is also the one shape a photo library refuses to import — macOS has
-    //    no type for it at all. Two loose files are what actually goes in, and therefore
-    //    what can be AirDropped from Photos to an iPhone afterwards. See
-    //    docs/researches/live-photo-photos-import.md §7.1.
     const extraLosses: LossItem[] = [
-        ...losses,
-        {
-          code: 'still-image-time-track-missing',
-          severity: severityOf('still-image-time-track-missing'),
-          // Now measured rather than hedged: taking all three of Apple's metadata tracks
-          // out of a working pair left it working, so its absence does not stop Photos
-          // from pairing the halves. It remains a difference from Apple's own output, and
-          // is reported as that. See docs/researches/live-photo-photos-import.md.
-          detail:
-            '没有写入 Apple 的 still-image-time 轨道：它用来标记静帧落在时间轴上的哪一点。' +
-            '实测它不影响相册是否把两半认成一张实况照片，但仍与 Apple 自身的产物有差异。',
-        },
+      ...losses,
+      {
+        code: 'still-image-time-track-missing',
+        severity: severityOf('still-image-time-track-missing'),
+        // Measured rather than hedged: taking all three of Apple's metadata tracks out of
+        // a working pair left it working, so its absence does not stop Photos from pairing
+        // the halves. It remains a difference from Apple's own output, and is reported as
+        // that. See docs/researches/live-photo-photos-import.md.
+        detail:
+          '没有写入 Apple 的 still-image-time 轨道：它用来标记静帧落在时间轴上的哪一点。' +
+          '实测它不影响相册是否把两半认成一张实况照片，但仍与 Apple 自身的产物有差异。',
+      },
     ];
 
-    if (request.params.package === 'two-files') {
-      const stillIsHeic = sniff(taggedStill.subarray(0, 64)).container === 'isobmff-heic';
-      return {
-        output: new Blob([taggedStill as BlobPart], {
-          type: stillIsHeic ? 'image/heic' : 'image/jpeg',
-        }),
-        outputName: outputNameFor(request.inputName, stillIsHeic ? 'heic' : 'jpg'),
-        companion: {
-          blob: new Blob([taggedMovie as BlobPart], { type: 'video/quicktime' }),
-          name: outputNameFor(request.inputName, 'mov'),
-        },
-        engineId: this.id,
-        did: 'transcode',
-        extraLosses,
-      };
-    }
-
-    const { bytes } = buildLivp(taggedStill, taggedMovie);
+    // 4. Hand both halves over loose — never as a `.livp`.
+    //
+    //    The `.livp` is one file, and it is also the one shape a photo library refuses to
+    //    import: macOS has no type for it at all, and iOS treats it as an unknown
+    //    document. Loose files are what actually goes in, and therefore what can be
+    //    AirDropped from Photos to an iPhone afterwards. See
+    //    docs/researches/live-photo-photos-import.md §7.1.
+    const stillIsHeic = sniff(taggedStill.subarray(0, 64)).container === 'isobmff-heic';
     return {
-      output: new Blob([bytes as BlobPart], { type: 'application/zip' }),
-      outputName: outputNameFor(request.inputName, 'livp'),
+      output: new Blob([taggedStill as BlobPart], {
+        type: stillIsHeic ? 'image/heic' : 'image/jpeg',
+      }),
+      outputName: outputNameFor(request.inputName, stillIsHeic ? 'heic' : 'jpg'),
+      companion: {
+        blob: new Blob([taggedMovie as BlobPart], { type: 'video/quicktime' }),
+        name: outputNameFor(request.inputName, 'mov'),
+      },
       engineId: this.id,
       did: 'transcode',
       extraLosses,

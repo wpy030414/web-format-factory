@@ -671,12 +671,20 @@ test.describe('动图 → 成对形态', () => {
   });
 
   test('动图 → Live Photo：两半都取自动图，MOV 带上 Apple 的配对标识', async ({ page }) => {
+    // The pair comes out as one archive when no folder picker is available — and the
+    // picker is a native dialog no test can drive, so it is removed here (src/lib/save.ts).
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
     await page.goto('/');
     await dropFile(page, 'anim.gif');
     expect(await waitForClass(page)).toBe('动图');
 
-    const result = await runConversion(page, 'Live Photo', 'out.livp', 240_000);
-    expect(result.offeredName).toMatch(/\.livp$/);
+    const result = await runConversion(page, 'Live Photo', 'pair.zip', 240_000);
+    // What the button offers is the pair, not a `.livp` — the zip-ness itself is settled
+    // by the unpacking below.
+    expect(result.offeredName).toMatch(/两个文件/);
 
     // Verified with tools that share no code with ours: unzip the archive, then ask
     // ffprobe whether the video half really carries the pairing identifier.
@@ -918,11 +926,18 @@ test.describe('Motion Photo — Google 的单文件形态', () => {
     // still and a MOV — neither of which the old path could find inside a JPEG.
     test.setTimeout(300_000);
 
+    // The Live Photo comes out as a pair, saved through the archive path when no folder
+    // picker is available — and the picker is a native dialog no test can drive, so it is
+    // removed here (src/lib/save.ts).
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
     await page.goto('/');
     await dropFile(page, 'motionphoto.jpg');
     expect(await waitForClass(page)).toBe('Live Photo');
 
-    const saved = await convertAndSave(page, 'Live Photo', 'out.livp');
+    const saved = await convertAndSave(page, 'Live Photo', 'pair.zip');
 
     const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
     tmpDirs.push(dir);
@@ -1090,55 +1105,13 @@ test.describe('兜底引擎', () => {
     expect(probed.codecs).toContain('vorbis');
   });
 
-  test('组装 Live Photo：把视频做成一个带配对标识的 .livp', async ({ page }) => {
-    await page.goto('/');
-    await dropFile(page, 'av.mp4');
-    await waitForClass(page);
-
-    await page.getByRole('button', { name: 'Live Photo', exact: true }).click();
-    await page.getByRole('button', { name: /开始转换/ }).click();
-
-    const downloadButton = page.getByTestId('download-result').first();
-    await expect(downloadButton).toBeVisible({ timeout: 240_000 });
-    await expect(downloadButton).toHaveText(/\.livp$/);
-
-    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
-    await downloadButton.click();
-    const download = await downloadPromise;
-
-    const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
-    tmpDirs.push(dir);
-    const saved = join(dir, 'out.livp');
-    await download.saveAs(saved);
-
-    // Verify with tools that share no code with ours: unzip the archive, then ask
-    // ffprobe whether the video half really carries Apple's pairing identifier.
-    const listing = execFileSync('unzip', ['-l', saved], { encoding: 'utf8' });
-    expect(listing).toMatch(/\.jpg/);
-    expect(listing).toMatch(/\.mov/);
-
-    execFileSync('unzip', ['-o', '-q', saved, '-d', dir]);
-    const movName = execFileSync('bash', ['-c', `cd ${dir} && ls *.mov`], { encoding: 'utf8' }).trim();
-    const tags = execFileSync(
-      'ffprobe',
-      ['-v', 'error', '-show_entries', 'format_tags', '-of', 'json', join(dir, movName)],
-      { encoding: 'utf8' },
-    );
-    // Without this tag the two halves are not a pair, and no Apple device would treat
-    // the result as a Live Photo.
-    expect(tags).toContain('com.apple.quicktime.content.identifier');
-  });
-});
-  test('组装 Live Photo：选「两个文件」时，落地的就是能进相册的那一对', async ({ page }) => {
-    // The `.livp` is one file — and it is also the one shape macOS refuses to import, so
-    // the route that actually reaches a photo library has to hand both halves over loose.
-    // See docs/researches/live-photo-photos-import.md §7.1.
-    //
-    // And it must do that in *one* gesture: every browser lets the first download through
-    // and throttles the rest, Chrome by asking and Safari by dropping them silently.
-    // A page cannot detect either. So the pair is saved either into a folder the user
-    // picks or as a single archive — and this test removes the folder picker so that the
-    // archive path, the one every browser can take, is the one exercised.
+  test('组装 Live Photo：一次落下两个文件，且它们是一对', async ({ page }) => {
+    // Two files, never a `.livp`: the container is the one shape a photo library refuses
+    // to import, so the pair is what has to come out. And it has to come out in a single
+    // gesture — browsers throttle the second download and say nothing about it, which is
+    // why the pair is archived rather than clicked twice (src/lib/save.ts). The folder
+    // picker is removed here so that the archive path, the one every browser can take, is
+    // the one exercised.
     await page.addInitScript(() => {
       delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
     });
@@ -1148,7 +1121,6 @@ test.describe('兜底引擎', () => {
     await waitForClass(page);
 
     await page.getByRole('button', { name: 'Live Photo', exact: true }).click();
-    await page.getByTestId('param-package').selectOption('two-files');
     await page.getByRole('button', { name: /开始转换/ }).click();
 
     const downloadButton = page.getByTestId('download-result').first();
@@ -1165,7 +1137,7 @@ test.describe('兜底引擎', () => {
     await download.saveAs(archive);
 
     // Unpacked by a tool that shares no code with ours, the archive has to yield exactly
-    // the two files a photo library needs.
+    // the two files a photo library needs — either half alone is not a Live Photo.
     execFileSync('unzip', ['-o', '-q', archive, '-d', dir]);
     const names = readdirSync(dir).filter((n) => n !== 'pair.zip');
     const stillName = names.find((n) => n.endsWith('.jpg'));
@@ -1173,10 +1145,10 @@ test.describe('兜底引擎', () => {
     expect(stillName, `没有静图：${names.join(', ')}`).toBeTruthy();
     expect(videoName, `没有视频：${names.join(', ')}`).toBeTruthy();
 
-    // And they have to be a *pair*: Photos matches them by an identifier both carry — the
-    // still in its maker notes, the video in its QuickTime metadata. Reading it out of the
-    // video with ffprobe and looking for the same string in the still's bytes keeps this
-    // to tools we did not write.
+    // And they have to be a *pair*: Photos matches the two by an identifier that both
+    // carry — the still in its maker notes, the video in its QuickTime metadata. Reading
+    // it out of the video with ffprobe and looking for the same string in the still's
+    // bytes keeps this to tools we did not write.
     const identifier = execFileSync(
       'ffprobe',
       [
@@ -1193,6 +1165,8 @@ test.describe('兜底引擎', () => {
     expect(still.includes(Buffer.from('Apple iOS'))).toBe(true);
     expect(still.includes(Buffer.from(identifier))).toBe(true);
   });
+});
+
 
 test.describe('能力诊断页', () => {
   test('从页脚进入，并报告真实的探测结果', async ({ page }) => {

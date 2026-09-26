@@ -156,11 +156,18 @@ test.describe('部署形态下运行', () => {
       if (r.url().endsWith('.wasm')) wasmResponses.push({ url: r.url(), type: r.headers()['content-type'] ?? '' });
     });
 
+    // The Live Photo comes out as a pair, saved through the archive path when no folder
+    // picker is available — and the picker is a native dialog no test can drive, so it is
+    // removed here (src/lib/save.ts).
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
     await page.goto('/');
     await dropFile(page, 'av.mp4');
     await expect(page.getByTestId('media-class').first()).toBeVisible({ timeout: 30_000 });
 
-    const saved = await convertAndSave(page, 'Live Photo', 'out.livp');
+    const saved = await convertAndSave(page, 'Live Photo', 'pair.zip');
 
     expect(wasmResponses.length).toBeGreaterThan(0);
     for (const r of wasmResponses) expect(r.type, r.url).toContain('application/wasm');
