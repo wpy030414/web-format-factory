@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { MediaEngineClient, asEngineError } from '../engines/client.ts';
+import { saveFiles } from '../lib/save.ts';
+import { triggerDownload } from '../lib/download.ts';
 import type { ConvertOutcome } from '../engines/client.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
 import { FORMATS } from '../core/registry/formats.ts';
@@ -363,8 +365,10 @@ export const useStore = create<State>((set, get) => {
     },
 
     downloadAll() {
+      // Archived rather than saved file-by-file: a folder picker per result would be a
+      // stack of dialogs, and two bare downloads per result is the thing browsers throttle.
       for (const f of get().files) {
-        if (f.status === 'done' && f.result) downloadResult(f.result);
+        if (f.status === 'done' && f.result) void saveFiles(resultFiles(f.result), { folder: false });
       }
     },
   };
@@ -556,14 +560,3 @@ export function downloadResult(result: {
   for (const file of resultFiles(result)) triggerDownload(file.blob, file.name);
 }
 
-export function triggerDownload(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoke on the next tick so the download has a chance to start.
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}

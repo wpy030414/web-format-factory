@@ -17,8 +17,9 @@ import { describeProfile, formatSize } from '@/core/probe/profile.ts';
 import { IMPOSSIBILITY_COPY } from '@/core/routing/impossibility.ts';
 import { planAllTargets, planFor } from '@/core/routing/resolve.ts';
 import type { FormatId, ImpossibilityReason } from '@/core/types.ts';
-import { downloadResult, resultFiles, type FileEntry } from '@/state/store.ts';
+import { resultFiles, type FileEntry } from '@/state/store.ts';
 import { useStore } from '@/state/store.ts';
+import { canSaveToFolder, saveFiles } from '@/lib/save.ts';
 import { canShareFiles, shareFiles } from '@/lib/share.ts';
 import {
   DownloadButton,
@@ -404,11 +405,17 @@ function StatusLine({ entry }: { entry: FileEntry }) {
           <CircleCheck className="size-3" /> 完成 · {formatSize(entry.result.size)}
         </span>
         <DownloadButton
-          onClick={() => downloadResult(entry.result!)}
-          // Named honestly when there are two: saving only the still would leave the user
-          // with a photograph and no Live Photo, which is exactly the failure this whole
-          // route exists to avoid.
-          name={entry.result.companion ? '两个文件' : entry.result.name}
+          onClick={() => void saveFiles(resultFiles(entry.result!))}
+          // Named for what actually lands. With two files it is either a folder the user
+          // picks or a `.zip` — and never "点击两次各下各的", which browsers throttle and
+          // then say nothing about (src/lib/save.ts).
+          name={
+            entry.result.companion
+              ? canSaveToFolder()
+                ? '两个文件'
+                : '两个文件（zip）'
+              : entry.result.name
+          }
         />
         {canShareFiles(resultFiles(entry.result)) && (
           <ShareButton onClick={() => void shareFiles(resultFiles(entry.result!))} />

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -1129,10 +1129,20 @@ test.describe('兜底引擎', () => {
     expect(tags).toContain('com.apple.quicktime.content.identifier');
   });
 });
-  test('组装 Live Photo：选「两个文件」时，给的是能进相册的那一对', async ({ page }) => {
+  test('组装 Live Photo：选「两个文件」时，落地的就是能进相册的那一对', async ({ page }) => {
     // The `.livp` is one file — and it is also the one shape macOS refuses to import, so
-    // the route that actually reaches a photo library has to be able to hand both halves
-    // over loose. See docs/researches/live-photo-photos-import.md §7.1.
+    // the route that actually reaches a photo library has to hand both halves over loose.
+    // See docs/researches/live-photo-photos-import.md §7.1.
+    //
+    // And it must do that in *one* gesture: every browser lets the first download through
+    // and throttles the rest, Chrome by asking and Safari by dropping them silently.
+    // A page cannot detect either. So the pair is saved either into a folder the user
+    // picks or as a single archive — and this test removes the folder picker so that the
+    // archive path, the one every browser can take, is the one exercised.
+    await page.addInitScript(() => {
+      delete (window as unknown as Record<string, unknown>).showDirectoryPicker;
+    });
+
     await page.goto('/');
     await dropFile(page, 'av.mp4');
     await waitForClass(page);
@@ -1145,29 +1155,29 @@ test.describe('兜底引擎', () => {
     await expect(downloadButton).toBeVisible({ timeout: 240_000 });
     await expect(downloadButton).toHaveText(/两个文件/);
 
-    // One click, two files. Either half alone is not a Live Photo — and saving only the
-    // still is precisely the quiet failure this route exists to prevent.
-    const downloads: { suggestedFilename(): string; saveAs(p: string): Promise<void> }[] = [];
-    page.on('download', (d) => downloads.push(d));
+    const downloadPromise = page.waitForEvent('download', { timeout: 60_000 });
     await downloadButton.click();
-    await expect.poll(() => downloads.length, { timeout: 60_000 }).toBe(2);
+    const download = await downloadPromise;
 
     const dir = mkdtempSync(join(tmpdir(), 'wff-e2e-'));
     tmpDirs.push(dir);
-    const names = downloads.map((d) => d.suggestedFilename());
+    const archive = join(dir, 'pair.zip');
+    await download.saveAs(archive);
+
+    // Unpacked by a tool that shares no code with ours, the archive has to yield exactly
+    // the two files a photo library needs.
+    execFileSync('unzip', ['-o', '-q', archive, '-d', dir]);
+    const names = readdirSync(dir).filter((n) => n !== 'pair.zip');
     const stillName = names.find((n) => n.endsWith('.jpg'));
     const videoName = names.find((n) => n.endsWith('.mov'));
     expect(stillName, `没有静图：${names.join(', ')}`).toBeTruthy();
     expect(videoName, `没有视频：${names.join(', ')}`).toBeTruthy();
 
-    await downloads[names.indexOf(stillName!)]!.saveAs(join(dir, stillName!));
-    await downloads[names.indexOf(videoName!)]!.saveAs(join(dir, videoName!));
-
-    // And they have to be a *pair*: Photos matches the two by an identifier that both
-    // carry — the still in its maker notes, the video in its QuickTime metadata. Reading
-    // it out of the video with ffprobe and looking for the same string in the still's
-    // bytes keeps this to tools that share no code with ours.
-    const tags = execFileSync(
+    // And they have to be a *pair*: Photos matches them by an identifier both carry — the
+    // still in its maker notes, the video in its QuickTime metadata. Reading it out of the
+    // video with ffprobe and looking for the same string in the still's bytes keeps this
+    // to tools we did not write.
+    const identifier = execFileSync(
       'ffprobe',
       [
         '-v', 'error',
@@ -1177,13 +1187,12 @@ test.describe('兜底引擎', () => {
       ],
       { encoding: 'utf8' },
     ).trim();
-    expect(tags).toMatch(/^[0-9A-F-]{36}$/);
+    expect(identifier).toMatch(/^[0-9A-F-]{36}$/);
 
     const still = readFileSync(join(dir, stillName!));
     expect(still.includes(Buffer.from('Apple iOS'))).toBe(true);
-    expect(still.includes(Buffer.from(tags))).toBe(true);
+    expect(still.includes(Buffer.from(identifier))).toBe(true);
   });
-
 
 test.describe('能力诊断页', () => {
   test('从页脚进入，并报告真实的探测结果', async ({ page }) => {
