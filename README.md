@@ -43,7 +43,7 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 
 ## 当前状态
 
-**阶段：功能完整的原型。影像线、音频线、动图线与 Live Photo 拆包均已端到端跑通。**
+**阶段：功能完整的原型。影像线、音频线、动图线与 Live Photo 双向均已端到端跑通。**
 
 已完成：
 
@@ -52,36 +52,42 @@ pnpm fixtures         # 用本机 ffmpeg/sips 等工具生成测试样本
 - 能力矩阵与「不可能转换」的归因文案（按理由归并展示）
 - 探测层：魔数嗅探 + 轨道解析 + 动图检测 + 透明通道检测，全部按内容识别、不看扩展名
 - 主干引擎（Mediabunny）与「基于编码」的复制/转码判定
-- 图像线：JPEG / PNG / WebP 静图互转，含 EXIF 方向与透明通道处理
-- 动图线：视频 ↔ GIF 双向，含调色板与抖动
+- 图像线：JPEG / PNG / WebP 静图互转，含 EXIF 方向与透明通道处理；
+  **HEIC 解码**——Safari 走原生快路径，其余浏览器按需取回约 3 MB 的 WASM 解码器
+- 动图线：视频 ↔ GIF 双向，含调色板与抖动；动态 WebP 与 APNG 的取帧走浏览器自带的
+  `ImageDecoder`，这条路上不必惊动兜底引擎
+- 音频线：M4A / MP3 / AAC / FLAC / WAV / OGG 互转；浏览器没有的 MP3、FLAC、AAC
+  编码器按需取回 WASM 扩展
 - Live Photo：四种形态的识别与拆包、**从视频组装**（写入 Apple 配对标识）、
-  **多文件拖入的自动配对**（优先按配对标识，退回文件名并如实说明是猜测）；
+  **多文件拖入的自动配对**、**手动配对与解除配对**（三种配对来源分别如实标注）；
   导出静图时会剥掉已经失效的 Motion Photo 声明
-- 兜底引擎（ffmpeg.wasm）：按需加载、跨源隔离检测、WORKERFS 挂载，用于动态 WebP 编码
-  与 Live Photo 的配对标识写入
+- 兜底引擎（ffmpeg.wasm）：按需加载、跨源隔离检测、WORKERFS 挂载，
+  用于动态 WebP / APNG 编码、真 Vorbis 编码与 Live Photo 的配对标识写入
 - 编码参数界面：由各格式自己声明的参数表渲染，改设置会改变代价判定，并真的传到编码器
 - 转换 Worker 与调度，主线程不卡
 - 可用界面：拖拽 → 识别 → 选目标 → 代价清单 → 转换 → 下载
 - 诊断页 `#/capabilities`：实测本机的跨源隔离、编解码器可用性、原生 HEIC 支持，
   并翻译成「这对应用意味着什么」
+- 部署配置样例（`deploy/`）与一份无依赖的参考服务器（`scripts/serve-deploy.mjs`）
+- 测试：单元与集成 179 项；Playwright 端到端 45 项跑 dev server，另有 6 项跑**构建产物**
+  （`pnpm test:e2e:prod`）。产物一律交给 ffprobe 校验
 
 ![能力诊断页](docs/screenshot-capabilities.png)
-- 部署配置样例：`deploy/nginx.conf.sample` 与 `deploy/Caddyfile.sample`
-- 测试：单元与集成 161 项，Playwright 端到端 36 项，产物一律交给 ffprobe 校验
-
-尚未完成：
-
-（主要格式线、动图、Live Photo 双向、编码参数、诊断页均已完成）
-- 编码参数的界面（`params` 目前为默认值）
-- 部署配置与 `/capabilities` 诊断页
 
 已知限制：
 
 - 分辨率缩放、帧率调整、裁剪、截取片段**不在范围内**（见 `docs/PRD.md` 的语义边界）。
-- 跨编码的转换（如 MP4 → WebM）依赖浏览器的 WebCodecs 硬件编码器，
-  可用性因平台而异，界面尚不会主动提示降级。
-- 动态 WebP 编码、真 Vorbis 编码需要下载约 31 MB 的兜底引擎，尚未接入。
-- Apple Live Photo 的 MOV 打标必须经兜底引擎完成——这一点是实测结论，详见 `docs/DECISIONS.md`。
+- 跨编码的转换（如 MP4 → WebM）依赖浏览器的 WebCodecs 硬件编码器，可用性因平台而异，
+  界面尚不会主动提示降级。
+- **组装 Live Photo 必须下载约 31 MB 的兜底引擎**，且页面须开启跨源隔离（COOP/COEP），
+  因为 Apple 的配对标识只能由 ffmpeg 写入——这是实测结论，详见 `docs/DECISIONS.md` ADR-004。
+  缺少响应头时界面会明确说明，而不是让转换一直停在那里。
+- **Apple 的 `still-image-time` 定时元数据轨道不写入**：语义已经查清，字节布局没有，
+  而手上没有一份 Apple 亲自产出的 MOV 可作参照。理由与解锁条件见 `docs/DECISIONS.md`
+  ADR-009——这是一次有意的取舍，不是遗漏。
+- Google Motion Photo 的**封装层**已实现且有往返自校验，但还没接上界面入口。
+- `deploy/` 下的 nginx / Caddy 样例**未经真实服务器验证**：写这份代码的机器上没有 nginx，
+  也没有容器。行为面由参考服务器覆盖，配置面由单测覆盖，但两者之间仍有一段是推断。
 
 ## 核心技术
 

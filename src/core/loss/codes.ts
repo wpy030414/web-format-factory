@@ -54,7 +54,13 @@ export type LossCode =
   | 'frames-dropped'
   /** A single frame was selected out of a moving sequence. */
   | 'frame-selected'
-  /** Apple's still-image-time track is absent, so the paired frame may not be shown. */
+  /**
+   * Apple's still-image-time track is absent.
+   *
+   * It marks where in the video the still sits. What its absence *changes* on a real
+   * device has not been measured — see docs/DECISIONS.md ADR-009 — so the copy says what
+   * is missing rather than what it costs.
+   */
   | 'still-image-time-track-missing'
 
   // --- metadata ----------------------------------------------------------

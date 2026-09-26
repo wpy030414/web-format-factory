@@ -187,7 +187,14 @@ export class LivePhotoEngine implements Engine {
         {
           code: 'still-image-time-track-missing',
           severity: 'info',
-          detail: '缺少 still-image-time 轨道，导入时静帧可能不与视频首帧对齐。',
+          // Deliberately says what is missing and stops there. The track's *purpose* is
+          // well documented — it marks where in the video the still sits — but what its
+          // absence actually changes on a device has not been measured, and claiming
+          // either way would be the kind of unfounded assert this project keeps catching
+          // itself making. See docs/DECISIONS.md ADR-009.
+          detail:
+            '没有写入 Apple 的 still-image-time 轨道：它用来标记静帧落在时间轴上的哪一点。' +
+            '缺少它的实际影响未经实测，所以这里既不宣称无害，也不宣称有害。',
         },
       ],
     };

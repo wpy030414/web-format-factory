@@ -127,7 +127,7 @@ export const LOSS_COPY: Record<LossItem['code'], string> = {
   'frame-timing-quantized': '帧间隔将被量化到 10 毫秒',
   'frames-dropped': '部分帧将被丢弃',
   'frame-selected': '将从动态内容中选取一帧',
-  'still-image-time-track-missing': '缺少静帧时间标记，配对显示的帧可能不准确',
+  'still-image-time-track-missing': '未写入静帧的时间标记轨道',
   'metadata-exif-dropped': 'EXIF 信息将丢失',
   'metadata-xmp-dropped': 'XMP 信息将丢失',
   'metadata-icc-dropped': '色彩配置文件将丢失',

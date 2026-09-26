@@ -16,7 +16,8 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 - 标识在 MOV 内以 QuickTime 元数据键 `com.apple.quicktime.content.identifier` 存在，
   位于 `moov/meta` 的 `keys` + `ilst` 结构中。
 - Apple 还会写入一条 `com.apple.quicktime.still-image-time` **定时元数据轨道**，
-  标记视频中哪一帧对应静图。
+  标记视频中哪一帧对应静图。它的样本载荷是**单字节 `0xFF`**，
+  而这个值本身没有意义——**有意义的是该样本的呈现时间戳**，那才是静帧在时间轴上的位置。
 - `.livp` 就是一个 ZIP，内含 `<name>.heic`（或 `.jpg`）与 `<name>.mov`。
 
 ### Google Motion Photo
@@ -82,10 +83,25 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
    为什么不走主干引擎，见 `docs/DECISIONS.md` ADR-004——那里有一次被实测推翻的推断记录。
 
 3. 静图侧写入 `apple:ContentIdentifier` 到 XMP（手写，见下）。
-4. **`still-image-time` 轨道在 v1 中省略**：写入一条单样本定时元数据轨道需要重写 `moov` 盒树。
-   Photos.app 在缺失时仍可导入（回落到第 0 帧），仅表现为静帧可能与视频首帧不重合。
-   以 `info` 级标注 `still-image-time-track-missing` 并写进文档。
-   只有在其自校验往返测试（写 → 用主干引擎重新解析 → 断言键与轨道存在）通过后，才可交付。
+4. **`still-image-time` 轨道不写**——这是一个有意的决定，理由见 `docs/DECISIONS.md` ADR-009。
+
+   已查实的是**语义**：一条定时元数据轨道，键为 `com.apple.quicktime.still-image-time`，
+   单样本、载荷一字节 `0xFF`，靠**它的呈现时间戳**标记静帧位置。两个相互独立的来源
+   对此说法一致。
+
+   未查实的是**字节**：`trak` / `mdia` / `stbl` 乃至 `mebx` 样本条目究竟如何摆放。
+   公开的 Swift 实现把这件事交给 AVFoundation，因此给出的是语义而非布局；那几份格式
+   分析也一样，只描述「是什么」，不描述「长什么样」。而本项目手上没有一份 Apple 亲自产出的
+   MOV 可供比对。
+
+   于是这里没有动手：凭着二手描述手写一棵 ISOBMFF 盒树，正是 ADR-004 记录下来的那次失败。
+   **解锁条件很具体：拿到一份真实的 Apple Live Photo MOV 作为参照物。**
+
+   当前如实标注为 `info` 级损失 `still-image-time-track-missing`。
+   在装上之前，交付前必须通过的往返测试是：写出的 MOV 交给主干引擎重新解析，
+   断言**多出一条 `mebx` 轨道**、其键为 `still-image-time`、且既有的视频轨道与
+   content identifier 一个不少。`ffprobe` 能读 `mebx` 轨道，所以结构有效性是可验证的；
+   **Apple 设备是否接受，在这台机器上无法验证**，这一点必须写进交付说明，不得含糊过去。
 5. 目标是 `.livp` 时用 **`level: 0`（不压缩）** 打包——对已压缩媒体再压缩毫无收益，存储则是瞬时的。
 6. **默认输出 `.livp`**，次选「两个文件」。UI 须如实说明：浏览器生成的 Live Photo
    导入 Photos.app 并不可靠；`.livp` 可通过 AirDrop/存储后导入。
@@ -135,7 +151,7 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 ## 完成定义
 
 四种形态的识别与拆包、Google 形态的生成、Apple 形态的生成（标识配对 + 静帧 + MOV）
-全部可用；`still-image-time` 轨道作为已知增量缺口被文档化。
+全部可用；`still-image-time` 轨道作为**已决意不写**的缺口被文档化，并写明解锁条件。
 
 ## 当前实现状态
 
@@ -149,8 +165,8 @@ Live Photo 的识别、拆包与**重新封装**（双向）。Live Photo 是全
 | Apple MOV 打标（content identifier） | ✅ 经兜底引擎写入，端到端已验证 |
 | 视频 → Live Photo（静帧取自视频首帧） | ✅ |
 | 多文件拖入的自动配对 | ✅ 优先按标识，退回文件名 |
-| 手动配对 / 解除配对 | ⏳ 尚未提供 UI 入口 |
-| `still-image-time` 定时元数据轨道 | ⏳ 已知缺口，见下 |
+| 手动配对 / 解除配对 | ✅ 三种配对来源分别如实标注 |
+| `still-image-time` 定时元数据轨道 | ⛔ 有意不写，见 ADR-009 |
 
 ### 打包器的自校验
 
