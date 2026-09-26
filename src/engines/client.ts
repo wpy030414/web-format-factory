@@ -1,7 +1,8 @@
 import type { FormatId } from '../core/types.ts';
 import type { LossItem } from '../core/loss/codes.ts';
 import type { MediaProfile } from '../core/probe/profile.ts';
-import type { JobProgress } from './types.ts';
+import { withDeadline } from '../core/deadline.ts';
+import { EngineError, type JobProgress } from './types.ts';
 import type { FromWorker, ToWorker } from '../workers/media.worker.ts';
 
 export interface ConvertOptions {
@@ -45,6 +46,18 @@ interface PendingProbe {
 let probeCounter = 0;
 
 /**
+ * How long a probe may take before it is declared lost.
+ *
+ * Generous to the point of being unreachable by real work: the probe reads a 64 KB header
+ * and, for a JPEG or a `.livp`, the file's own bytes — no probe of a file a person would
+ * actually drop has any business taking a minute. It is here for the one case that has no
+ * other way out: a worker that never answers at all. Nothing below this layer can recover
+ * from that, so the card would otherwise read 「识别中」 for as long as the tab stays open,
+ * with no error and no way to tell it apart from a hang.
+ */
+const PROBE_DEADLINE_MS = 60_000;
+
+/**
  * Main-thread handle for the media worker.
  *
  * The worker exists so a long conversion cannot freeze the page, and so the media
@@ -73,10 +86,12 @@ export class MediaEngineClient {
   }
 
   private handle(msg: FromWorker): void {
-    if (msg.type === 'probed') {
+    if (msg.type === 'probed' || msg.type === 'probe-failed') {
       const pending = this.probes.get(msg.probeId);
       this.probes.delete(msg.probeId);
-      pending?.resolve(msg.profile);
+      if (!pending) return;
+      if (msg.type === 'probed') pending.resolve(msg.profile);
+      else pending.reject(new EngineError(msg.message, 'decode-failed'));
       return;
     }
 
@@ -111,9 +126,21 @@ export class MediaEngineClient {
   /** Identify a file. Runs off the main thread because it needs the media library. */
   probe(file: Blob, fileName: string): Promise<MediaProfile> {
     const probeId = `p${++probeCounter}`;
-    return new Promise<MediaProfile>((resolve, reject) => {
+    const answer = new Promise<MediaProfile>((resolve, reject) => {
       this.probes.set(probeId, { resolve, reject });
       this.post({ type: 'probe', probeId, file, fileName });
+    });
+
+    // Last resort, and the only one that survives a worker which has stopped talking
+    // altogether. The worker answers every probe it receives — including the ones it
+    // cannot identify — so reaching this deadline means the reply is never coming, and
+    // saying so is strictly better than an eternal spinner.
+    return withDeadline(answer, PROBE_DEADLINE_MS, () => {
+      this.probes.delete(probeId);
+      throw new EngineError(
+        `识别超时（${PROBE_DEADLINE_MS / 1000} 秒没有回应）。请移除这个文件后重新导入。`,
+        'engine-unavailable',
+      );
     });
   }
 

@@ -33,14 +33,47 @@ const SNIFF_WINDOW = SNIFF_BYTES;
  */
 const ANIMATION_WINDOW = 4 * 1024 * 1024;
 
+/** The message from whatever was thrown, which is a string more often than an Error. */
+function messageOf(cause: unknown): string {
+  if (cause instanceof Error && cause.message) return cause.message;
+  if (typeof cause === 'string' && cause.trim()) return cause;
+  return '未知原因';
+}
+
 /**
  * Probe a file: identify its container by content, then read its track structure.
  *
  * Extensions are never consulted, and a failure to parse is not an error — it yields a
  * profile with `unknown` class and a reason, because "we could not identify this" is a
  * legitimate outcome the UI must be able to explain.
+ *
+ * That is a promise this function has to keep absolutely, because of where it runs: the
+ * worker's message handler has no other way to answer. A rejection there is caught by
+ * nothing, and the caller's promise stays pending for good — the card sits at 「识别中」
+ * with no error, no retry and nothing to click, which is indistinguishable from the app
+ * having hung. The parsing below already returns reasons instead of throwing; this
+ * wrapper covers the one step that is out of our hands, reading the bytes at all. A
+ * source whose backing store has gone, or an allocation that did not fit, fails *here*.
  */
 export async function probe(file: File | Blob, name = 'file'): Promise<MediaProfile> {
+  try {
+    return await identify(file, name);
+  } catch (cause) {
+    return {
+      name,
+      size: file.size,
+      container: 'unknown',
+      mediaClass: 'unknown',
+      videoTracks: [],
+      audioTracks: [],
+      otherTrackCount: 0,
+      unknownReason: `无法读取这个文件：${messageOf(cause)}`,
+    };
+  }
+}
+
+/** The identification proper. Permitted to reject; `probe` is what turns that into a profile. */
+async function identify(file: File | Blob, name: string): Promise<MediaProfile> {
   const head = new Uint8Array(await file.slice(0, SNIFF_WINDOW).arrayBuffer());
   const sniffed = sniff(head);
 

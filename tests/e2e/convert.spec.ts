@@ -340,6 +340,65 @@ test.describe('识别与目标选择', () => {
   });
 });
 
+test.describe('识别中不会变成永远的等待', () => {
+  test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
+
+  /**
+   * A card showing 「识别中」 is waiting on a promise the worker has not settled. Nothing
+   * above it is a rendering question — the state itself is still pending — so a card still
+   * saying 「识别中」 a second later means the reply is never coming, and there is no error
+   * to read and nothing to click.
+   *
+   * The report that produced this test read exactly that way: several files, identified
+   * instantly, and a list stuck on 「识别中」 until the tab was left and came back. The
+   * worker's reply is turned into a failure here because that is the case the client used
+   * to drop on the floor — it had a branch for `probed` and no branch for anything else,
+   * so an unrecognised message left the probe's promise pending for good.
+   */
+  test('worker 报错时卡片说明失败，而不是停在「识别中」', async ({ page }) => {
+    await page.addInitScript(() => {
+      const Orig = window.Worker;
+      window.Worker = class extends Orig {
+        constructor(scriptURL: string | URL, options?: WorkerOptions) {
+          super(scriptURL, options);
+          let spent = false;
+          // Registered before the app assigns `onmessage`, and at the target phase
+          // listeners run in registration order — so this sees the reply first.
+          this.addEventListener('message', (event) => {
+            if (spent || event.data?.type !== 'probed') return;
+            spent = true;
+            // Swallow the real answer and answer in its place.
+            event.stopImmediatePropagation();
+            this.dispatchEvent(
+              new MessageEvent('message', {
+                data: {
+                  type: 'probe-failed',
+                  probeId: event.data.probeId,
+                  message: '模拟的读取失败',
+                },
+              }),
+            );
+          });
+        }
+      };
+    });
+
+    await page.goto('/');
+    await dropFiles(page, [
+      { fixture: 'av.mp4', as: 'broken.mp4' },
+      { fixture: 'av.mov', as: 'fine.mov' },
+    ]);
+
+    // One file failed and says so. The count of 1 is also the proof that a failure for
+    // one file does not take the rest of the batch down with it.
+    await expect(page.getByTestId('media-class')).toHaveCount(1, { timeout: 20_000 });
+    await expect(page.getByText('模拟的读取失败')).toBeVisible();
+
+    // And nothing is left waiting. This is the assertion the bug failed.
+    await expect(page.getByText('识别中')).toHaveCount(0);
+  });
+});
+
 test.describe('端到端转换并校验产物', () => {
   test.skip(!haveFixtures, '测试样本缺失，先运行 pnpm fixtures');
 

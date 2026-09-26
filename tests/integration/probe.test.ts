@@ -186,3 +186,30 @@ describe('probe — type-level guarantees', () => {
     }
   });
 });
+
+/**
+ * The probe must *always* answer.
+ *
+ * Not a stylistic preference: this function runs as the worker's reply to a card that is
+ * already on screen, and the worker has no other way to answer. A rejection there is
+ * caught by nothing, the caller's promise stays pending, and the card reads 「识别中」
+ * for as long as the tab is open — with no error, no retry, and no way for the user to
+ * tell it apart from the app having hung. These two cases are the ones the browser can
+ * put us in through no fault of our own.
+ */
+describe('probe — always answers', () => {
+  /** A file-shaped source whose reads fail, as a source whose backing store has gone does. */
+  const unreadable = (name: string, size = 4096): Blob => {
+    const fail = () => Promise.reject(new Error('NotReadableError: the file could not be read'));
+    return { name, size, slice: () => ({ arrayBuffer: fail }), arrayBuffer: fail } as unknown as Blob;
+  };
+
+  it('names an unreadable source rather than rejecting', async () => {
+    const p = await probe(unreadable('gone.mp4'), 'gone.mp4');
+    expect(p.mediaClass).toBe('unknown');
+    expect(p.unknownReason).toContain('无法读取');
+    // Still a profile the card can describe, so the row does not go blank.
+    expect(p.size).toBe(4096);
+  });
+
+});

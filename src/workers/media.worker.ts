@@ -34,6 +34,7 @@ export type ToWorker =
 
 export type FromWorker =
   | { type: 'probed'; probeId: string; profile: MediaProfile }
+  | { type: 'probe-failed'; probeId: string; message: string }
   | { type: 'progress'; jobId: string; progress: JobProgress }
   | {
       type: 'done';
@@ -129,8 +130,20 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
   }
 
   if (msg.type === 'probe') {
-    const profile = await probe(msg.file, msg.fileName);
-    post({ type: 'probed', probeId: msg.probeId, profile });
+    // Answer either way. `probe` is written never to reject, but this is the only place
+    // the caller's promise can be settled, so an unexpected throw must still produce a
+    // reply: silence here strands the card at 「识别中」 forever, which reads as the app
+    // having hung rather than as one file it could not read.
+    try {
+      const profile = await probe(msg.file, msg.fileName);
+      post({ type: 'probed', probeId: msg.probeId, profile });
+    } catch (cause) {
+      post({
+        type: 'probe-failed',
+        probeId: msg.probeId,
+        message: describeError(cause).message,
+      });
+    }
     return;
   }
 
